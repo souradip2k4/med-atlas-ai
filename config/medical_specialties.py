@@ -1,10 +1,35 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from fdr.config.medical_specialties import MEDICAL_HIERATCHY, flatten_specialties_to_level
-
-LEVEL_OF_SPECIALTIES = 1  # 0th and 1st level of specialties
+AVAILABLE_SPECIALTIES = [
+    "internalMedicine",
+    "familyMedicine",
+    "emergencyMedicine",
+    "pathology",
+    "generalSurgery",
+    "dentistry",
+    "ophthalmology",
+    "otolaryngology",
+    "cardiology",
+    "cardiacSurgery",
+    "pediatrics",
+    "gynecologyAndObstetrics",
+    "criticalCareMedicine",
+    "physicalMedicineAndRehabilitation",
+    "anesthesia",
+    "infectiousDiseases",
+    "radiology",
+    "medicalOncology",
+    "nephrology",
+    "orthopedicSurgery",
+    "orthodontics",
+    "hospiceAndPalliativeInternalMedicine",
+    "plasticSurgery",
+    "neonatologyPerinatalMedicine",
+    "geriatricsInternalMedicine",
+    "endocrinologyAndDiabetesAndMetabolism"
+]
 
 MEDICAL_SPECIALTIES_SYSTEM_PROMPT = (
     """You are a medical specialty classifier. Extract medical specialties for a specific facility using step-by-step reasoning.
@@ -19,7 +44,7 @@ STEP 2: Read the provided text content and images carefully and identify ALL med
 
 STEP 3: Map each identified term to the EXACT specialty names below (case-sensitive):
 """
-    + "\n- ".join(flatten_specialties_to_level(MEDICAL_HIERATCHY, LEVEL_OF_SPECIALTIES))
+    + "\n- ".join(AVAILABLE_SPECIALTIES)
     + """
 
 STEP 4: Choose the most specific appropriate specialty when multiple levels exist. Do not select subspecialties unless there is strong evidence they are present at the organization of interest.
@@ -109,5 +134,19 @@ Return structured output containing valid specialties from the provided list, wi
 
 class MedicalSpecialties(BaseModel):
     specialties: Optional[List[str]] = Field(
-        ..., description="The medical specialties associated with the organization"
+        ..., description="The medical specialties associated with the organization. Return ONLY string names, not objects."
     )
+
+    @field_validator("specialties", mode="before")
+    @classmethod
+    def extract_name_if_dict(cls, v):
+        if isinstance(v, list):
+            processed = []
+            for item in v:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("specialty") or str(item)
+                    processed.append(str(name))
+                else:
+                    processed.append(str(item))
+            return processed
+        return v

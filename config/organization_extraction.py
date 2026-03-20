@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 ORGANIZATION_EXTRACTION_SYSTEM_PROMPT = """
 You are a healthcare classification expert.
@@ -51,11 +51,28 @@ Examples of what NOT to extract:
 class OrganizationExtractionOutput(BaseModel):
     ngos: Optional[List[str]] = Field(
         default_factory=list,
+        description="A list of string names of NGOs. ONLY string names, not objects."
     )
     facilities: Optional[List[str]] = Field(
         default_factory=list,
+        description="A list of string names of facilities. ONLY string names, not objects."
     )
     other_organizations: Optional[List[str]] = Field(
         default_factory=list,
         description="List of names entities present in the text that don't meet facility or ngo classifications.",
     )
+
+    @field_validator("ngos", "facilities", "other_organizations", mode="before")
+    @classmethod
+    def extract_name_if_dict(cls, v):
+        if isinstance(v, list):
+            processed = []
+            for item in v:
+                if isinstance(item, dict):
+                    # If LLM generated a dict, try to extract the name
+                    name = item.get("name") or item.get("organization") or str(item)
+                    processed.append(str(name))
+                else:
+                    processed.append(str(item))
+            return processed
+        return v

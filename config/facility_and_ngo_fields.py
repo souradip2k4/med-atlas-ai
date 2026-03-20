@@ -1,6 +1,6 @@
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 ORGANIZATION_INFORMATION_SYSTEM_PROMPT = """
 You extract facts ONLY about this organization: {organization}.
@@ -35,7 +35,9 @@ class BaseOrganization(BaseModel):
         None,
         description="Official phone number associated with the organization in E164 format (e.g. '+233392022664')",
     )
-    email: Optional[str] = Field(None, description="The organization's primary email address")
+    email: Optional[str] = Field(
+        None, description="The organization's primary email address"
+    )
     websites: Optional[List[str]] = Field(
         None, description="Websites associated with the organization"
     )
@@ -46,17 +48,24 @@ class BaseOrganization(BaseModel):
         None, description="The year in which the organization was established"
     )
     acceptsVolunteers: Optional[bool] = Field(
-        None, description="Indicates whether the organization accepts clinical volunteers"
+        None,
+        description="Indicates whether the organization accepts clinical volunteers",
     )
-    facebookLink: Optional[str] = Field(None, description="URL to the organization's Facebook page")
+    facebookLink: Optional[str] = Field(
+        None, description="URL to the organization's Facebook page"
+    )
     twitterLink: Optional[str] = Field(
         None, description="URL to the organization's Twitter profile"
     )
-    linkedinLink: Optional[str] = Field(None, description="URL to the organization's LinkedIn page")
+    linkedinLink: Optional[str] = Field(
+        None, description="URL to the organization's LinkedIn page"
+    )
     instagramLink: Optional[str] = Field(
         None, description="URL to the organization's Instagram account"
     )
-    logo: Optional[str] = Field(None, description="URL linking to the organization's logo image")
+    logo: Optional[str] = Field(
+        None, description="URL linking to the organization's logo image"
+    )
 
     # Flattened address fields
     address_line1: Optional[str] = Field(
@@ -64,9 +73,12 @@ class BaseOrganization(BaseModel):
         description="Street address only (building number, street name). Do NOT include city, state, or country here.",
     )
     address_line2: Optional[str] = Field(
-        None, description="Additional street address information (apartment, suite, building name)"
+        None,
+        description="Additional street address information (apartment, suite, building name)",
     )
-    address_line3: Optional[str] = Field(None, description="Third line of street address if needed")
+    address_line3: Optional[str] = Field(
+        None, description="Third line of street address if needed"
+    )
     address_city: Optional[str] = Field(
         None,
         description="City or town name of the organization. Parse from comma-separated location strings if needed.",
@@ -91,19 +103,26 @@ class BaseOrganization(BaseModel):
 class Facility(BaseOrganization):
     """Pydantic model for facility structured output extraction."""
 
-    facilityTypeId: Optional[Literal["hospital", "pharmacy", "doctor", "clinic", "dentist"]] = Field(
-        None, description="type of facility (only one of these values)"
-    )
+    facilityTypeId: Optional[
+        Literal["hospital", "pharmacy", "doctor", "clinic", "dentist"]
+    ] = Field(None, description="type of facility (only one of these values)")
     operatorTypeId: Optional[Literal["public", "private"]] = Field(
         None, description="Indicates if the facility is privately or publicly operated"
     )
     affiliationTypeIds: Optional[
         List[
-            Literal["faith-tradition", "philanthropy-legacy", "community", "academic", "government"]
+            Literal[
+                "faith-tradition",
+                "philanthropy-legacy",
+                "community",
+                "academic",
+                "government",
+            ]
         ]
     ] = Field(None, description="Indicates facility affiliations. One or more of these")
     description: Optional[str] = Field(
-        None, description="A brief paragraph describing the facility's services and/or history"
+        None,
+        description="A brief paragraph describing the facility's services and/or history",
     )
     area: Optional[int] = Field(
         None, description="Total floor area of the facility in square meters"
@@ -115,14 +134,33 @@ class Facility(BaseOrganization):
         None, description="Overall inpatient bed capacity of the facility"
     )
 
+    @field_validator("facilityTypeId", "operatorTypeId", mode="before")
+    @classmethod
+    def lowercase_enums(cls, v):
+        if isinstance(v, str):
+            return v.lower()
+        return v
+
+    @field_validator("affiliationTypeIds", mode="before")
+    @classmethod
+    def lowercase_affiliation_enums(cls, v):
+        if isinstance(v, list):
+            return [str(item).lower() if isinstance(item, str) else item for item in v]
+        elif isinstance(v, str):
+            return [v.lower()]
+        return v
+
 
 class NGO(BaseOrganization):
     """Pydantic model for NGO structured output extraction."""
 
     countries: Optional[List[str]] = Field(
-        None, description="Countries where the NGO operates. (array of ISO alpha-2 codes)"
+        None,
+        description="Countries where the NGO operates. (array of ISO alpha-2 codes)",
     )
-    missionStatement: Optional[str] = Field(None, description="The NGO's formal mission statement")
+    missionStatement: Optional[str] = Field(
+        None, description="The NGO's formal mission statement"
+    )
     missionStatementLink: Optional[str] = Field(
         None, description="A url to the NGO's published mission statement"
     )
