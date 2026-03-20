@@ -4,6 +4,16 @@
 # importing pyspark / langchain at module load time, which would fail
 # in local environments without those packages.
 
+import typing
+
+if typing.TYPE_CHECKING:
+    from pipeline.loader import load_csv_to_delta
+    from pipeline.preprocessor import synthesize_row_text
+    from pipeline.extractor import LLMExtractor
+    from pipeline.merger import merge_extraction_results
+    from pipeline.fact_generator import generate_facts
+    from pipeline.embedding import EmbeddingGenerator
+
 __all__ = [
     "load_csv_to_delta",
     "synthesize_row_text",
@@ -31,7 +41,4 @@ def __getattr__(name):
     if name == "generate_facts":
         from pipeline.fact_generator import generate_facts
         return generate_facts
-    if name == "EmbeddingGenerator":
-        from pipeline.embedding import EmbeddingGenerator
-        return EmbeddingGenerator
     raise AttributeError(f"module 'pipeline' has no attribute {name!r}")

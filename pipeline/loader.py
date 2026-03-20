@@ -52,10 +52,28 @@ def load_csv_to_delta(db: DatabricksDatabase, csv_path: str | None = None) -> Da
             lambda v: None if pd.isna(v) or (isinstance(v, str) and v.strip() in null_tokens) else v
         )
 
-    logger.info("Loaded %d rows × %d columns", len(pdf), len(pdf.columns))
+    csv_row_count = len(pdf)
+    logger.info("Loaded %d rows × %d columns", csv_row_count, len(pdf.columns))
+
+    # ── Skip write if table already fully loaded ──────────────────────
+    if db._table_exists("raw_facilities"):
+        existing_count = db.read_delta("raw_facilities").count()
+        if existing_count == csv_row_count:
+            logger.info(
+                "raw_facilities already contains %d rows (matches CSV). Skipping write.",
+                existing_count,
+            )
+            return db.read_delta("raw_facilities")
 
     # ── Convert to Spark ─────────────────────────────────────────────
     sdf = db.spark.createDataFrame(pdf.astype(object).where(pdf.notna(), None))
+
+    # Drop columns that cause Databricks catalog issues or are not needed
+    drop_cols = {"logo", "source_url", "mongo_db", "content_table_id"}
+    existing_drop = [c for c in sdf.columns if c in drop_cols]
+    if existing_drop:
+        logger.info("Dropping non-essential columns from raw_facilities: %s", existing_drop)
+        sdf = sdf.drop(*existing_drop)
 
     # ── Write as Delta table ─────────────────────────────────────────
     db.write_delta(sdf, "raw_facilities")

@@ -3,6 +3,7 @@ preprocessor.py — Synthesise a single structured text block from a CSV row.
 """
 
 import re
+import ast
 from typing import Dict, Any
 
 
@@ -16,8 +17,8 @@ _SKIP_COLS = {
 
 
 def _normalise(text: str) -> str:
-    """Lowercase, strip, collapse duplicate whitespace."""
-    text = text.strip().lower()
+    """Strip, collapse duplicate whitespace."""
+    text = text.strip()
     text = re.sub(r"\s+", " ", text)
     return text
 
@@ -28,7 +29,6 @@ def synthesize_row_text(row: Dict[str, Any]) -> str:
     structured text block suitable for LLM consumption.
 
     Normalisation rules applied:
-      - lowercase
       - strip whitespace
       - remove duplicate spaces
 
@@ -54,9 +54,25 @@ def synthesize_row_text(row: Dict[str, Any]) -> str:
         if not str_val or str_val.lower() in ("null", "none", "n/a", "[]", '""'):
             continue
 
-        normalised_val = _normalise(str_val)
+        # ── List Parsing ─────────────────────────────────────────────────────────
+        if str_val.startswith("[") and str_val.endswith("]"):
+            try:
+                parsed_list = ast.literal_eval(str_val)
+                if isinstance(parsed_list, list):
+                    valid_items = [_normalise(str(x)) for x in parsed_list if x and str(x).strip()]
+                    if valid_items:
+                        normalised_val = "\n  - " + "\n  - ".join(valid_items)
+                    else:
+                        continue
+                else:
+                    normalised_val = _normalise(str_val)
+            except (ValueError, SyntaxError):
+                normalised_val = _normalise(str_val)
+        else:
+            normalised_val = _normalise(str_val)
+
         # Use a readable field label (replace underscores, title-case)
-        label = key.replace("_", " ").strip()
+        label = key.replace("_", " ").title().strip()
         lines.append(f"{label}: {normalised_val}")
 
     return "\n".join(lines)

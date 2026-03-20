@@ -38,6 +38,15 @@ class BaseOrganization(BaseModel):
     email: Optional[List[str]] = Field(
         None, description="The organization's email addresses"
     )
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def coerce_email_to_list(cls, v):
+        """Wrap a single email string into a list."""
+        if isinstance(v, str):
+            return [v]
+        return v
+
     websites: Optional[List[str]] = Field(
         None, description="Websites associated with the organization"
     )

@@ -28,15 +28,12 @@ from storage.database import DatabricksDatabase
 from storage.models import (
     FACILITY_RECORDS_SCHEMA,
     FACILITY_FACTS_SCHEMA,
-    FACILITY_EMBEDDINGS_SCHEMA,
     REGIONAL_INSIGHTS_SCHEMA,
 )
 from pipeline.loader import load_csv_to_delta
 from pipeline.extractor import LLMExtractor
 from pipeline.merger import merge_extraction_results
 from pipeline.fact_generator import generate_facts
-from pipeline.embedding import EmbeddingGenerator
-from vector.vector_store import VectorStore
 
 load_dotenv()
 
@@ -59,7 +56,6 @@ def main() -> None:
     # Ensure target tables exist
     db.create_table_if_not_exists("facility_records", FACILITY_RECORDS_SCHEMA)
     db.create_table_if_not_exists("facility_facts", FACILITY_FACTS_SCHEMA)
-    db.create_table_if_not_exists("facility_embeddings", FACILITY_EMBEDDINGS_SCHEMA)
     db.create_table_if_not_exists("regional_insights", REGIONAL_INSIGHTS_SCHEMA)
 
     # ── 2. Load CSV → raw_facilities ─────────────────────────────────
@@ -100,16 +96,35 @@ def main() -> None:
     rows = pending_rows
 
     max_process_rows = os.getenv("MAX_PROCESS_ROWS")
+    limit = None
     if max_process_rows:
         try:
             limit = int(max_process_rows)
-            rows = rows[:limit]
-            logger.info("MAX_PROCESS_ROWS=%d. Limiting pending processing to %d rows.", limit, len(rows))
+            if len(processed_ids) >= limit:
+                logger.info(
+                    "\u2550\u2550\u2550 MAX_PROCESS_ROWS=%d reached (%d rows already in facility_records). "
+                    "Nothing to do. \u2550\u2550\u2550",
+                    limit, len(processed_ids),
+                )
+                _print_summary(db)
+                return
+            # Cap pending rows to the remaining budget
+            remaining = limit - len(processed_ids)
+            rows = rows[:remaining]
+            logger.info(
+                "MAX_PROCESS_ROWS=%d, already processed=%d, will process %d more rows.",
+                limit, len(processed_ids), len(rows),
+            )
         except ValueError:
             logger.warning("MAX_PROCESS_ROWS is not a valid integer. Processing all pending rows.")
-            
+
     total_rows = len(rows)
     logger.info("Pending rows to process: %d", total_rows)
+
+    if total_rows == 0:
+        logger.info("═══ All rows already processed. Nothing to do. ═══")
+        _print_summary(db)
+        return
 
     def _process_row(
         args: Tuple[int, Dict[str, Any]]
@@ -164,58 +179,13 @@ def main() -> None:
 
         logger.info("Extraction and batch-saving complete.")
 
-    # ── 6. Generate embeddings ───────────────────────────────────────
-    logger.info("═══ Stage 6: Generating embeddings ═══")
-    if db._table_exists("facility_facts"):
-        try:
-            facts_df = db.read_delta("facility_facts")
-            all_facts_dicts = [r.asDict() for r in facts_df.collect()]
-            
-            # Checkpoint for embeddings
-            embedded_ids = set()
-            if db._table_exists("facility_embeddings"):
-                try:
-                    emb_df_exist = db.read_delta("facility_embeddings").select("fact_id")
-                    embedded_ids = {r["fact_id"] for r in emb_df_exist.collect()}
-                    logger.info("Checkpoint: Found %d already embedded facts", len(embedded_ids))
-                except Exception:
-                    pass
-            
-            facts_to_embed = [f for f in all_facts_dicts if f["fact_id"] not in embedded_ids]
-            
-            if facts_to_embed:
-                logger.info("Pending facts to embed: %d", len(facts_to_embed))
-                emb_gen = EmbeddingGenerator()
-                embedding_records = emb_gen.generate_embeddings(facts_to_embed)
 
-                if embedding_records:
-                    logger.info("Writing %d new embedding records", len(embedding_records))
-                    emb_df = db.spark.createDataFrame(
-                        embedding_records, FACILITY_EMBEDDINGS_SCHEMA
-                    )
-                    db.append_delta(emb_df, "facility_embeddings")
-            else:
-                logger.info("No new facts to embed.")
-        except Exception as e:
-            logger.warning("Could not process embeddings: %s", e)
-    else:
-        logger.warning("facility_facts table not found — skipping embedding stage")
 
     # ── 7. Regional insights ─────────────────────────────────────────
     logger.info("═══ Stage 7: Aggregating regional insights ═══")
     _compute_regional_insights(db)
 
-    # ── 8. Vector Search index ───────────────────────────────────────
-    logger.info("═══ Stage 8: Creating Vector Search index ═══")
-    try:
-        vs = VectorStore()
-        vs.create_endpoint()
-        vs.create_index()
-        vs.sync_index()
-        logger.info("Vector Search index ready")
-    except Exception as e:
-        logger.error("Vector Search setup failed: %s", e, exc_info=True)
-        logger.info("You can create the index manually later via VectorStore()")
+
 
     elapsed = time.time() - t0
     logger.info("═══ Pipeline complete in %.1f seconds ═══", elapsed)
@@ -280,15 +250,17 @@ def _print_summary(db) -> None:
         "raw_facilities",
         "facility_records",
         "facility_facts",
-        "facility_embeddings",
         "regional_insights",
     ]
     logger.info("─── Final table row counts ───")
     for t in tables:
-        try:
-            count = db.read_delta(t).count()
-            logger.info("  %-30s %d rows", t, count)
-        except Exception:
+        if db._table_exists(t):
+            try:
+                count = db.read_delta(t).count()
+                logger.info("  %-30s %d rows", t, count)
+            except Exception:
+                logger.info("  %-30s (error reading)", t)
+        else:
             logger.info("  %-30s (not found)", t)
 
 

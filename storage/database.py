@@ -21,7 +21,7 @@ class DatabricksDatabase:
     def __init__(self):
         self.host = os.getenv("DATABRICKS_HOST")
         self.token = os.getenv("DATABRICKS_TOKEN")
-        self.catalog = os.getenv("CATALOG", "main")
+        self.catalog = os.getenv("CATALOG", "med_atlas_ai")
         self.schema = os.getenv("SCHEMA", "default")
         self._spark = None
 
@@ -100,11 +100,7 @@ class DatabricksDatabase:
 
     def _table_exists(self, table_name: str) -> bool:
         """Check whether a table exists in the current catalog+schema."""
-        try:
-            self.spark.sql(f"DESCRIBE TABLE {self.fqn(table_name)}")
-            return True
-        except Exception:
-            return False
+        return self.spark.catalog.tableExists(self.fqn(table_name))
 
     # ── Read / Write ─────────────────────────────────────────────────────
 

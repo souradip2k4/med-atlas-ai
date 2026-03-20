@@ -95,17 +95,7 @@ FACILITY_FACTS_SCHEMA = StructType([
     StructField("source_text", StringType(), nullable=True),
 ])
 
-# ---------------------------------------------------------------------------
-# facility_embeddings — facts + precomputed embedding vectors
-# ---------------------------------------------------------------------------
-FACILITY_EMBEDDINGS_SCHEMA = StructType([
-    StructField("fact_id", StringType(), nullable=False),
-    StructField("facility_id", StringType(), nullable=False),
-    StructField("fact_text", StringType(), nullable=False),
-    StructField("fact_type", StringType(), nullable=False),
-    StructField("embedding", ArrayType(FloatType()), nullable=False),
-    StructField("source_row_id", StringType(), nullable=True),
-])
+
 
 # ---------------------------------------------------------------------------
 # regional_insights — aggregated regional analytics
