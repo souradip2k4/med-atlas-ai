@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 AVAILABLE_SPECIALTIES = [
     "internalMedicine",
@@ -134,8 +134,16 @@ Return structured output containing valid specialties from the provided list, wi
 
 class MedicalSpecialties(BaseModel):
     specialties: Optional[List[str]] = Field(
-        ..., description="The medical specialties associated with the organization. Return ONLY string names, not objects."
+        None, description="The medical specialties associated with the organization. Return ONLY string names, not objects."
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_raw_list(cls, data):
+        # If the LLM returned a raw list instead of a dict, wrap it!
+        if isinstance(data, list):
+            return {"specialties": data}
+        return data
 
     @field_validator("specialties", mode="before")
     @classmethod

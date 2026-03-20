@@ -35,8 +35,8 @@ class BaseOrganization(BaseModel):
         None,
         description="Official phone number associated with the organization in E164 format (e.g. '+233392022664')",
     )
-    email: Optional[str] = Field(
-        None, description="The organization's primary email address"
+    email: Optional[List[str]] = Field(
+        None, description="The organization's email addresses"
     )
     websites: Optional[List[str]] = Field(
         None, description="Websites associated with the organization"

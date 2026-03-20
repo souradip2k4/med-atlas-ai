@@ -125,7 +125,7 @@ def merge_extraction_results(
         _parse_csv_array(row.get("phone_numbers")),
     )
     email = _first_non_null(
-        fac.email if fac else None, row.get("email")
+        fac.email[0] if fac and fac.email else None, row.get("email")
     )
     websites = _merge_arrays(
         fac.websites if fac else None,
