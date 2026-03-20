@@ -93,8 +93,6 @@ FACILITY_FACTS_SCHEMA = StructType([
     StructField("source_row_id", StringType(), nullable=False),
     StructField("source_column", StringType(), nullable=True),
     StructField("source_text", StringType(), nullable=True),
-    StructField("source_start", IntegerType(), nullable=True),
-    StructField("source_end", IntegerType(), nullable=True),
 ])
 
 # ---------------------------------------------------------------------------

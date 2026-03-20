@@ -4,7 +4,7 @@ fact_generator.py — Generate atomic facts from structured facility records.
 Each fact gets:
   - fact_id (UUID)
   - fact_type (procedure / equipment / capability / specialty)
-  - provenance: source_row_id, source_column, source_text, source_start, source_end
+  - provenance: source_row_id, source_column, source_text
   - 2-3 paraphrased variants per fact for better embedding recall
 """
 
@@ -40,21 +40,6 @@ _TEMPLATES = {
 }
 
 
-def _find_span(evidence_text: str, item: str):
-    """
-    Best-effort substring search to find source_start / source_end
-    for provenance highlighting.
-    """
-    if not evidence_text or not item:
-        return None, None
-    lower_ev = evidence_text.lower()
-    lower_item = item.lower()
-    idx = lower_ev.find(lower_item)
-    if idx == -1:
-        return None, None
-    return idx, idx + len(item)
-
-
 def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Generate atomic facts from a single facility record.
@@ -76,7 +61,6 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     facility_name = facility_record.get("facility_name", "Unknown")
     facility_id = facility_record.get("facility_id", "")
     source_row_id = facility_record.get("source_row_id", "")
-    evidence_text = facility_record.get("evidence_text", "")
 
     field_map = {
         "procedure": ("procedures", "procedure"),
@@ -96,7 +80,6 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
             if not item or not item.strip():
                 continue
             item = item.strip()
-            src_start, src_end = _find_span(evidence_text, item)
 
             # Generate paraphrased variants (2-3 per item)
             for tmpl in templates:
@@ -109,8 +92,6 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "source_row_id": source_row_id,
                     "source_column": source_col,
                     "source_text": item,
-                    "source_start": src_start,
-                    "source_end": src_end,
                 })
 
     if not facts:

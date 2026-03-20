@@ -69,7 +69,7 @@ def main() -> None:
     logger.info("raw_facilities table: %d rows", total_rows)
 
     # ── 3 & 4. Extraction + Merge (parallel) ────────────────────────
-    max_workers = int(os.getenv("MAX_WORKERS", "8"))
+    max_workers = int(os.getenv("MAX_WORKERS", "4"))
     logger.info(
         "═══ Stage 3-4: LLM extraction + merge (parallel, workers=%d) ═══",
         max_workers,
@@ -80,6 +80,36 @@ def main() -> None:
     rows: List[Dict[str, Any]] = [
         row.asDict() for row in raw_df.collect()
     ]
+
+    # Checkpointing: Filter out already processed records
+    processed_ids = set()
+    if db._table_exists("facility_records"):
+        try:
+            existing_df = db.read_delta("facility_records").select("source_row_id")
+            processed_ids = {r["source_row_id"] for r in existing_df.collect()}
+            logger.info("Checkpoint: Found %d already processed rows in facility_records", len(processed_ids))
+        except Exception as e:
+            logger.warning("Could not read existing facility_records for checkpointing: %s", e)
+
+    pending_rows = []
+    for r in rows:
+        row_id = str(r.get("unique_id") or r.get("pk_unique_id") or "")
+        if row_id not in processed_ids:
+            pending_rows.append(r)
+            
+    rows = pending_rows
+
+    max_process_rows = os.getenv("MAX_PROCESS_ROWS")
+    if max_process_rows:
+        try:
+            limit = int(max_process_rows)
+            rows = rows[:limit]
+            logger.info("MAX_PROCESS_ROWS=%d. Limiting pending processing to %d rows.", limit, len(rows))
+        except ValueError:
+            logger.warning("MAX_PROCESS_ROWS is not a valid integer. Processing all pending rows.")
+            
+    total_rows = len(rows)
+    logger.info("Pending rows to process: %d", total_rows)
 
     def _process_row(
         args: Tuple[int, Dict[str, Any]]
@@ -99,58 +129,77 @@ def main() -> None:
             )
             return None, []
 
-    facility_records: List[Dict[str, Any]] = []
-    all_facts: List[Dict[str, Any]] = []
+    BATCH_SIZE = 50
+    facility_records_batch: List[Dict[str, Any]] = []
+    facts_batch: List[Dict[str, Any]] = []
     done = 0
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_process_row, (i, r)): i
-            for i, r in enumerate(rows)
-        }
-        for future in as_completed(futures):
-            record, facts = future.result()
-            done += 1
-            if record:
-                facility_records.append(record)
-                all_facts.extend(facts)
-            if done % 50 == 0 or done == total_rows:
-                logger.info(
-                    "Progress: %d/%d rows done (%d records, %d facts so far)",
-                    done, total_rows, len(facility_records), len(all_facts),
-                )
+    if total_rows > 0:
+        logger.info("═══ Starting Extraction (Batched Saves) ═══")
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_process_row, (i, r)): i
+                for i, r in enumerate(rows)
+            }
+            for future in as_completed(futures):
+                record, facts = future.result()
+                done += 1
+                if record:
+                    facility_records_batch.append(record)
+                    facts_batch.extend(facts)
+                
+                if done % 10 == 0 or done == total_rows:
+                    logger.info("Progress: %d/%d pending rows done", done, total_rows)
+                
+                # Batch save
+                if len(facility_records_batch) >= BATCH_SIZE or done == total_rows:
+                    if facility_records_batch:
+                        records_df = db.spark.createDataFrame(facility_records_batch, FACILITY_RECORDS_SCHEMA)
+                        db.append_delta(records_df, "facility_records")
+                        facility_records_batch.clear()
+                    if facts_batch:
+                        facts_df = db.spark.createDataFrame(facts_batch, FACILITY_FACTS_SCHEMA)
+                        db.append_delta(facts_df, "facility_facts")
+                        facts_batch.clear()
 
-    logger.info(
-        "Extraction complete: %d records, %d facts",
-        len(facility_records), len(all_facts),
-    )
-
-    # ── Write facility_records ───────────────────────────────────────
-    if facility_records:
-        logger.info("═══ Writing facility_records ═══")
-        records_df = db.spark.createDataFrame(facility_records, FACILITY_RECORDS_SCHEMA)
-        db.write_delta(records_df, "facility_records")
-
-    # ── Write facility_facts ─────────────────────────────────────────
-    if all_facts:
-        logger.info("═══ Writing facility_facts ═══")
-        facts_df = db.spark.createDataFrame(all_facts, FACILITY_FACTS_SCHEMA)
-        db.write_delta(facts_df, "facility_facts")
+        logger.info("Extraction and batch-saving complete.")
 
     # ── 6. Generate embeddings ───────────────────────────────────────
     logger.info("═══ Stage 6: Generating embeddings ═══")
-    if all_facts:
-        emb_gen = EmbeddingGenerator()
-        embedding_records = emb_gen.generate_embeddings(all_facts)
+    if db._table_exists("facility_facts"):
+        try:
+            facts_df = db.read_delta("facility_facts")
+            all_facts_dicts = [r.asDict() for r in facts_df.collect()]
+            
+            # Checkpoint for embeddings
+            embedded_ids = set()
+            if db._table_exists("facility_embeddings"):
+                try:
+                    emb_df_exist = db.read_delta("facility_embeddings").select("fact_id")
+                    embedded_ids = {r["fact_id"] for r in emb_df_exist.collect()}
+                    logger.info("Checkpoint: Found %d already embedded facts", len(embedded_ids))
+                except Exception:
+                    pass
+            
+            facts_to_embed = [f for f in all_facts_dicts if f["fact_id"] not in embedded_ids]
+            
+            if facts_to_embed:
+                logger.info("Pending facts to embed: %d", len(facts_to_embed))
+                emb_gen = EmbeddingGenerator()
+                embedding_records = emb_gen.generate_embeddings(facts_to_embed)
 
-        if embedding_records:
-            logger.info("Writing %d embedding records", len(embedding_records))
-            emb_df = db.spark.createDataFrame(
-                embedding_records, FACILITY_EMBEDDINGS_SCHEMA
-            )
-            db.write_delta(emb_df, "facility_embeddings")
+                if embedding_records:
+                    logger.info("Writing %d new embedding records", len(embedding_records))
+                    emb_df = db.spark.createDataFrame(
+                        embedding_records, FACILITY_EMBEDDINGS_SCHEMA
+                    )
+                    db.append_delta(emb_df, "facility_embeddings")
+            else:
+                logger.info("No new facts to embed.")
+        except Exception as e:
+            logger.warning("Could not process embeddings: %s", e)
     else:
-        logger.warning("No facts to embed — skipping embedding stage")
+        logger.warning("facility_facts table not found — skipping embedding stage")
 
     # ── 7. Regional insights ─────────────────────────────────────────
     logger.info("═══ Stage 7: Aggregating regional insights ═══")

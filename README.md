@@ -113,7 +113,7 @@ python main.py
 
 - **Manual embeddings** — Full control over embedding generation; no managed/auto embeddings
 - **Multi-phrasing** — 2-3 paraphrased variants per fact for better retrieval recall
-- **Provenance tracking** — `source_column`, `source_text`, `source_start`, `source_end` for UI citations
+- **Provenance tracking** — `source_column`, `source_text` for UI citations
 - **Per-field confidence** — Separate confidence scores for specialties, equipment, capabilities
 - **Suspicious flagging** — Auto-detects rows with no extracted medical data
 - **One row per LLM call** — No batching across rows to avoid cross-contamination

@@ -116,14 +116,32 @@ class DatabricksDatabase:
     ) -> None:
         """Write a DataFrame to a Delta table."""
         fqn = self.fqn(table_name)
-        (
-            df.write
-            .format("delta")
-            .mode(mode)
-            .option("overwriteSchema", "true")
-            .saveAsTable(fqn)
-        )
-        logger.info("Wrote to %s (mode=%s)", fqn, mode)
+        is_new_table = not self._table_exists(table_name)
+        
+        if is_new_table:
+            logger.info("Table '%s' does not exist. Initiating creation...", fqn)
+            
+        try:
+            (
+                df.write
+                .format("delta")
+                .mode(mode)
+                .option("overwriteSchema", "true")
+                .saveAsTable(fqn)
+            )
+            
+            if is_new_table:
+                logger.info("Successfully created table '%s' (mode=%s)", fqn, mode)
+            else:
+                logger.info("Wrote to existing table '%s' (mode=%s)", fqn, mode)
+                
+        except Exception as e:
+            if is_new_table:
+                logger.error("Databricks error while creating table '%s': %s", fqn, e)
+            else:
+                logger.error("Databricks error while writing to table '%s': %s", fqn, e)
+            # Re-raise so the pipeline halts/handles it upstream
+            raise e
 
     def append_delta(self, df: DataFrame, table_name: str) -> None:
         """Append a DataFrame to an existing Delta table."""
