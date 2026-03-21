@@ -89,69 +89,45 @@ class LLMExtractor:
         response = self.llm.invoke(messages)
         return _strip_markdown_json(response.content)
 
-    def _parse_with_retry(self, model_cls, raw_json: str, system_prompt: str, user_text: str):
-        """
-        Parse ``raw_json`` via ``model_cls.model_validate_json``.
-        Retry the LLM call once on failure.
-        Returns (parsed_model, confidence) or (None, 0.0).
-        """
-        # Attempt 1
+    def _parse(self, model_cls, raw_json: str):
+        """Parse ``raw_json`` via ``model_cls.model_validate_json``."""
         try:
             parsed = model_cls.model_validate_json(raw_json)
-            return parsed, 0.85
-        except Exception as e1:
-            logger.warning(
-                "Validation failed (attempt 1) for %s: %s — retrying",
-                model_cls.__name__, e1,
-            )
-
-        # Retry — call LLM again
-        try:
-            raw_json_retry = self._call_llm(system_prompt, user_text)
-            parsed = model_cls.model_validate_json(raw_json_retry)
-            return parsed, 0.65  # lower confidence on retry
-        except Exception as e2:
+            return parsed
+        except Exception as e:
             logger.error(
-                "Validation failed (attempt 2) for %s: %s — skipping",
-                model_cls.__name__, e2,
+                "Validation failed for %s: %s — skipping",
+                model_cls.__name__, e,
             )
-            return None, 0.0
+            return None
 
     # ── Step 1: Organization extraction ──────────────────────────────
 
-    def extract_organizations(
-        self, text: str
-    ) -> Tuple[Optional[OrganizationExtractionOutput], float]:
+    def extract_organizations(self, text: str) -> Optional[OrganizationExtractionOutput]:
         prompt = ORGANIZATION_EXTRACTION_SYSTEM_PROMPT
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(OrganizationExtractionOutput, raw, prompt, text)
+        return self._parse(OrganizationExtractionOutput, raw)
 
     # ── Step 2: Facility fact extraction ─────────────────────────────
 
-    def extract_facility_facts(
-        self, text: str, facility_name: str
-    ) -> Tuple[Optional[FacilityFacts], float]:
+    def extract_facility_facts(self, text: str, facility_name: str) -> Optional[FacilityFacts]:
         prompt = FREE_FORM_SYSTEM_PROMPT.replace("{organization}", facility_name)
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(FacilityFacts, raw, prompt, text)
+        return self._parse(FacilityFacts, raw)
 
     # ── Step 3: Medical specialty extraction ──────────────────────────
 
-    def extract_medical_specialties(
-        self, text: str, facility_name: str
-    ) -> Tuple[Optional[MedicalSpecialties], float]:
+    def extract_medical_specialties(self, text: str, facility_name: str) -> Optional[MedicalSpecialties]:
         prompt = MEDICAL_SPECIALTIES_SYSTEM_PROMPT.replace("{organization}", facility_name)
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(MedicalSpecialties, raw, prompt, text)
+        return self._parse(MedicalSpecialties, raw)
 
     # ── Step 4: Facility structured extraction ───────────────────────
 
-    def extract_facility_info(
-        self, text: str, facility_name: str
-    ) -> Tuple[Optional[Facility], float]:
+    def extract_facility_info(self, text: str, facility_name: str) -> Optional[Facility]:
         prompt = ORGANIZATION_INFORMATION_SYSTEM_PROMPT.replace("{organization}", facility_name)
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(Facility, raw, prompt, text)
+        return self._parse(Facility, raw)
 
     # ── Full row processing ──────────────────────────────────────────
 
@@ -169,7 +145,7 @@ class LLMExtractor:
         source_row_id = str(row.get("unique_id") or row.get("pk_unique_id") or "")
 
         # Step 1 — Organizations
-        org_output, conf_org = self.extract_organizations(synth_text)
+        org_output = self.extract_organizations(synth_text)
 
         # Determine primary facility name
         facility_name = None
@@ -179,13 +155,13 @@ class LLMExtractor:
             facility_name = row.get("name") or "Unknown Facility"
 
         # Step 2 — Facility facts
-        facts_output, conf_facts = self.extract_facility_facts(synth_text, facility_name)
+        facts_output = self.extract_facility_facts(synth_text, facility_name)
 
         # Step 3 — Medical specialties
-        specialties_output, conf_spec = self.extract_medical_specialties(synth_text, facility_name)
+        specialties_output = self.extract_medical_specialties(synth_text, facility_name)
 
         # Step 4 — Facility structured info
-        facility_output, conf_fac = self.extract_facility_info(synth_text, facility_name)
+        facility_output = self.extract_facility_info(synth_text, facility_name)
 
         return {
             "org_output": org_output,
@@ -195,8 +171,4 @@ class LLMExtractor:
             "facility_name": facility_name,
             "synthesized_text": synth_text,
             "source_row_id": source_row_id,
-            "confidence_org": conf_org,
-            "confidence_facts": conf_facts,
-            "confidence_specialties": conf_spec,
-            "confidence_facility": conf_fac,
         }

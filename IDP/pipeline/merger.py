@@ -153,24 +153,7 @@ def merge_extraction_results(
         _try_int(row.get("capacity")),
     )
 
-    # ── Confidence ──
-    conf_org = extraction.get("confidence_org", 0.0)
-    conf_facts = extraction.get("confidence_facts", 0.0)
-    conf_spec = extraction.get("confidence_specialties", 0.0)
-    conf_fac = extraction.get("confidence_facility", 0.0)
-    extraction_confidence = round(
-        (conf_org + conf_facts + conf_spec + conf_fac) / 4, 3
-    )
-
-    # ── Suspicious checks ──
-    is_suspicious = False
-    suspicious_reason = None
-    if not specialties and not procedures and not equipment and not capabilities:
-        is_suspicious = True
-        suspicious_reason = "No medical data extracted from any step"
-    elif facility_name.lower() in ("unknown", "unknown facility"):
-        is_suspicious = True
-        suspicious_reason = "Could not determine facility name"
+    # ── Removed Confidence & Suspicious logic per user request ──
 
     return {
         "facility_id": str(uuid.uuid4()),
@@ -196,15 +179,6 @@ def merge_extraction_results(
         "accepts_volunteers": _try_bool(accepts_volunteers),
         "number_doctors": _try_int(number_doctors),
         "capacity": _try_int(capacity),
-        "evidence_text": synth_text,
-        "source_text": synth_text[:500] if synth_text else None,
-        "source_column": "synthesized",
-        "extraction_confidence": extraction_confidence,
-        "confidence_specialties": round(conf_spec, 3),
-        "confidence_equipment": round(conf_facts, 3),
-        "confidence_capabilities": round(conf_facts, 3),
-        "is_suspicious": is_suspicious,
-        "suspicious_reason": suspicious_reason,
         "created_at": now,
         "updated_at": now,
     }

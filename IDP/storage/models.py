@@ -59,19 +59,6 @@ FACILITY_RECORDS_SCHEMA = StructType([
     StructField("number_doctors", IntegerType(), nullable=True),
     StructField("capacity", IntegerType(), nullable=True),
 
-    # ── Evidence & confidence ──
-    StructField("evidence_text", StringType(), nullable=False),
-    StructField("source_text", StringType(), nullable=True),
-    StructField("source_column", StringType(), nullable=True),
-    StructField("extraction_confidence", FloatType(), nullable=False),
-    StructField("confidence_specialties", FloatType(), nullable=True),
-    StructField("confidence_equipment", FloatType(), nullable=True),
-    StructField("confidence_capabilities", FloatType(), nullable=True),
-
-    # ── Suspicious flag ──
-    StructField("is_suspicious", BooleanType(), nullable=True),
-    StructField("suspicious_reason", StringType(), nullable=True),
-
     # ── Timestamps ──
     StructField("created_at", TimestampType(), nullable=True),
     StructField("updated_at", TimestampType(), nullable=True),
