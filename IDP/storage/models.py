@@ -105,4 +105,6 @@ REGIONAL_INSIGHTS_SCHEMA = StructType([
     StructField("gap_flag", BooleanType(), nullable=True),
     StructField("risk_level", StringType(), nullable=True),
     StructField("recommendation", StringType(), nullable=True),
+    StructField("contributing_facility_ids", ArrayType(StringType()), nullable=True),
+    StructField("contributing_source_row_ids", ArrayType(StringType()), nullable=True),
 ])
