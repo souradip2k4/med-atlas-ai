@@ -30,7 +30,7 @@ from storage.models import (
     FACILITY_FACTS_SCHEMA,
     REGIONAL_INSIGHTS_SCHEMA,
 )
-from pipeline.loader import load_csv_to_delta
+from pipeline.loader import load_csv_data
 from pipeline.extractor import LLMExtractor
 from pipeline.merger import merge_extraction_results
 from pipeline.fact_generator import generate_facts
@@ -58,11 +58,9 @@ def main() -> None:
     db.create_table_if_not_exists("facility_facts", FACILITY_FACTS_SCHEMA)
     db.create_table_if_not_exists("regional_insights", REGIONAL_INSIGHTS_SCHEMA)
 
-    # ── 2. Load CSV → raw_facilities ─────────────────────────────────
-    logger.info("═══ Stage 2: Loading CSV → raw_facilities ═══")
-    raw_df = load_csv_to_delta(db)
-    total_rows = raw_df.count()
-    logger.info("raw_facilities table: %d rows", total_rows)
+    # ── 2. Load CSV ──────────────────────────────────────────────────
+    logger.info("═══ Stage 2: Loading CSV ═══")
+    rows = load_csv_data()
 
     # ── 3 & 4. Extraction + Merge (parallel) ────────────────────────
     max_workers = int(os.getenv("MAX_WORKERS", "4"))
@@ -71,11 +69,6 @@ def main() -> None:
         max_workers,
     )
     extractor = LLMExtractor()
-
-    # Collect rows as dicts
-    rows: List[Dict[str, Any]] = [
-        row.asDict() for row in raw_df.collect()
-    ]
 
     # Checkpointing: Filter out already processed records
     processed_ids = set()
@@ -247,7 +240,6 @@ def _compute_regional_insights(db) -> None:
 def _print_summary(db) -> None:
     """Print row counts for all output tables."""
     tables = [
-        "raw_facilities",
         "facility_records",
         "facility_facts",
         "regional_insights",

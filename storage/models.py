@@ -21,11 +21,6 @@ from pyspark.sql.types import (
 )
 
 # ---------------------------------------------------------------------------
-# raw_facilities — ingested CSV as-is
-# ---------------------------------------------------------------------------
-RAW_FACILITIES_SCHEMA = None  # inferred from CSV at load time
-
-# ---------------------------------------------------------------------------
 # facility_records — structured extraction output
 # ---------------------------------------------------------------------------
 FACILITY_RECORDS_SCHEMA = StructType([

@@ -1,35 +1,19 @@
 """
-loader.py — Load CSV data and write to Delta table `raw_facilities`.
+loader.py — Load CSV data directly into memory.
 """
 
 import os
 import re
 import logging
+from typing import List, Dict, Any
 
 import pandas as pd
-from pyspark.sql import DataFrame
-
-from storage.database import DatabricksDatabase
 
 logger = logging.getLogger(__name__)
 
-
-def load_csv_to_delta(db: DatabricksDatabase, csv_path: str | None = None) -> DataFrame:
+def load_csv_data(csv_path: str | None = None) -> List[Dict[str, Any]]:
     """
-    Load the facility CSV file, clean NULLs, and persist as
-    the ``raw_facilities`` Delta table.
-
-    Parameters
-    ----------
-    db : DatabricksDatabase
-        Active database manager.
-    csv_path : str, optional
-        Path to the CSV file.  Falls back to the ``CSV_PATH`` env var.
-
-    Returns
-    -------
-    pyspark.sql.DataFrame
-        The loaded Spark DataFrame.
+    Load the facility CSV file, clean NULLs, and return as a list of dicts.
     """
     if csv_path is None:
         csv_path = os.getenv("CSV_PATH", "Virtue Foundation Ghana v0.3 - Sheet1.csv")
@@ -52,30 +36,8 @@ def load_csv_to_delta(db: DatabricksDatabase, csv_path: str | None = None) -> Da
             lambda v: None if pd.isna(v) or (isinstance(v, str) and v.strip() in null_tokens) else v
         )
 
-    csv_row_count = len(pdf)
-    logger.info("Loaded %d rows × %d columns", csv_row_count, len(pdf.columns))
+    logger.info("Loaded %d rows × %d columns from CSV directly into memory.", len(pdf), len(pdf.columns))
 
-    # ── Skip write if table already fully loaded ──────────────────────
-    if db._table_exists("raw_facilities"):
-        existing_count = db.read_delta("raw_facilities").count()
-        if existing_count == csv_row_count:
-            logger.info(
-                "raw_facilities already contains %d rows (matches CSV). Skipping write.",
-                existing_count,
-            )
-            return db.read_delta("raw_facilities")
-
-    # ── Convert to Spark ─────────────────────────────────────────────
-    sdf = db.spark.createDataFrame(pdf.astype(object).where(pdf.notna(), None))
-
-    # Drop columns that cause Databricks catalog issues or are not needed
-    drop_cols = {"logo", "source_url", "mongo_db", "content_table_id"}
-    existing_drop = [c for c in sdf.columns if c in drop_cols]
-    if existing_drop:
-        logger.info("Dropping non-essential columns from raw_facilities: %s", existing_drop)
-        sdf = sdf.drop(*existing_drop)
-
-    # ── Write as Delta table ─────────────────────────────────────────
-    db.write_delta(sdf, "raw_facilities")
-
-    return sdf
+    # Convert the cleaned pandas dataframe to a list of dicts
+    # .where(pd.notnull(pdf), None) ensures NaNs become Python None
+    return pdf.where(pd.notnull(pdf), None).to_dict('records')
