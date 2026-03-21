@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_databricks import ChatDatabricks
 
 from config.organization_extraction import (
     OrganizationExtractionOutput,
@@ -67,7 +68,6 @@ class LLMExtractor:
     """
 
     def __init__(self, endpoint: str | None = None):
-        from langchain_databricks import ChatDatabricks
 
         self.endpoint = endpoint or os.getenv(
             "LLM_ENDPOINT", "databricks-meta-llama-3-1-70b-instruct"
