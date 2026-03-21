@@ -1,6 +1,6 @@
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ORGANIZATION_INFORMATION_SYSTEM_PROMPT = """
 You extract facts ONLY about this organization: {organization}.
@@ -25,6 +25,21 @@ Rules (hard):
 
 class BaseOrganization(BaseModel):
     """Base model containing shared fields between Facility and NGO."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_keys(cls, data: Any) -> Any:
+        """Fix LLM capitalizing keys (e.g. 'Name' -> 'name', 'OfficialWebsite' -> 'officialWebsite')"""
+        if isinstance(data, dict):
+            new_data = {}
+            for k, v in data.items():
+                if isinstance(k, str) and k:
+                    new_k = k[0].lower() + k[1:]
+                    new_data[new_k] = v
+                else:
+                    new_data[k] = v
+            return new_data
+        return data
 
     name: str = Field(..., description="Official name of the organization")
     phone_numbers: Optional[List[str]] = Field(

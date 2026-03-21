@@ -64,11 +64,7 @@ def main() -> None:
 
     # ── 3 & 4. Extraction + Merge (parallel) ────────────────────────
     max_workers = int(os.getenv("MAX_WORKERS", "4"))
-    logger.info(
-        "═══ Stage 3-4: LLM extraction + merge (parallel, workers=%d) ═══",
-        max_workers,
-    )
-    extractor = LLMExtractor()
+    logger.info("═══ Stage 3-4: Identify pending rows for extraction ═══")
 
     # Checkpointing: Filter out already processed records
     processed_ids = set()
@@ -89,6 +85,8 @@ def main() -> None:
     rows = pending_rows
 
     max_process_rows = os.getenv("MAX_PROCESS_ROWS")
+    max_process_rows = min(int(max_process_rows), 987)
+    print("max_process_rows = ", max_process_rows)
     limit = None
     if max_process_rows:
         try:
@@ -119,24 +117,6 @@ def main() -> None:
         _print_summary(db)
         return
 
-    def _process_row(
-        args: Tuple[int, Dict[str, Any]]
-    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Process a single row: extract → merge → generate facts."""
-        idx, row = args
-        row_id = row.get("unique_id") or row.get("pk_unique_id") or str(idx)
-        try:
-            extraction = extractor.process_row(row)
-            record = merge_extraction_results(extraction, row)
-            facts = generate_facts(record)
-            return record, facts
-        except Exception as exc:
-            logger.error(
-                "Row %d (id=%s, name=%s) failed: %s — skipping",
-                idx + 1, row_id, row.get("name", "?"), exc,
-            )
-            return None, []
-
     BATCH_SIZE = 50
     facility_records_batch: List[Dict[str, Any]] = []
     facts_batch: List[Dict[str, Any]] = []
@@ -144,6 +124,28 @@ def main() -> None:
 
     if total_rows > 0:
         logger.info("═══ Starting Extraction (Batched Saves) ═══")
+        
+        logger.info("Connecting to Databricks Model Serving endpoint...")
+        extractor = LLMExtractor()
+        
+        def _process_row(
+            args: Tuple[int, Dict[str, Any]]
+        ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+            """Process a single row: extract → merge → generate facts."""
+            idx, row = args
+            row_id = row.get("unique_id") or row.get("pk_unique_id") or str(idx)
+            try:
+                extraction = extractor.process_row(row)
+                record = merge_extraction_results(extraction, row)
+                facts = generate_facts(record)
+                return record, facts
+            except Exception as exc:
+                logger.error(
+                    "Row %d (id=%s, name=%s) failed: %s — skipping",
+                    idx + 1, row_id, row.get("name", "?"), exc,
+                )
+                return None, []
+
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(_process_row, (i, r)): i
