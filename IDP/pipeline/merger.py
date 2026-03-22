@@ -262,6 +262,15 @@ def merge_extraction_results(
         getattr(fac, "affiliationTypeIds", None) if fac else None,
         _parse_csv_array(row.get("affiliationTypeIds")),
     )
+    operator_type = _first_non_null(
+        getattr(fac, "operatorTypeId", None) if fac else None,
+        row.get("operatorTypeId")
+    )
+    facility_type = _first_non_null(
+        getattr(fac, "facilityTypeId", None) if fac else None,
+        row.get("facilityTypeId"),
+        row.get("classification")
+    )
 
     # ── Removed Confidence & Suspicious logic per user request ──
 
@@ -290,6 +299,10 @@ def merge_extraction_results(
         "number_doctors": _try_int(number_doctors),
         "capacity": _try_int(capacity),
         "description": desc,
+        "mission_statement": mission_statement,
+        "affiliation_types": affiliation_types or None,
+        "operator_type": operator_type,
+        "facility_type": facility_type,
         "created_at": now,
         "updated_at": now,
     }
