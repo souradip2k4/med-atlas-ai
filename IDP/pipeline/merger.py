@@ -41,6 +41,99 @@ def _first_non_null(*values: Any) -> Any:
     return None
 
 
+# ── Ghana city → region lookup (deterministic fallback when LLM cannot infer) ──
+_GHANA_CITY_REGION: dict[str, str] = {
+    # Greater Accra Region
+    "accra": "Greater Accra Region",
+    "tema": "Greater Accra Region",
+    "dansoman": "Greater Accra Region",
+    "madina": "Greater Accra Region",
+    "nungua": "Greater Accra Region",
+    "teshie": "Greater Accra Region",
+    "lashibi": "Greater Accra Region",
+    "dome": "Greater Accra Region",
+    "achimota": "Greater Accra Region",
+    "kasoa": "Greater Accra Region",
+    # Ashanti Region
+    "kumasi": "Ashanti Region",
+    "obuasi": "Ashanti Region",
+    "bekwai": "Ashanti Region",
+    "asante mampong": "Ashanti Region",
+    "ejisu": "Ashanti Region",
+    "konongo": "Ashanti Region",
+    "abuakwa": "Ashanti Region",  # suburb of Kumasi
+    # Western Region
+    "takoradi": "Western Region",
+    "sekondi": "Western Region",
+    "tarkwa": "Western Region",
+    "prestea": "Western Region",
+    "bogoso": "Western Region",
+    "apremdo": "Western Region",
+    "axim": "Western Region",
+    "half assini": "Western Region",
+    # Central Region
+    "cape coast": "Central Region",
+    "elmina": "Central Region",
+    "winneba": "Central Region",
+    "agona swedru": "Central Region",
+    "mankessim": "Central Region",
+    "saltpond": "Central Region",
+    # Eastern Region
+    "koforidua": "Eastern Region",
+    "nkawkaw": "Eastern Region",
+    "abomosu": "Eastern Region",
+    "oda": "Eastern Region",
+    "suhum": "Eastern Region",
+    "nsawam": "Eastern Region",
+    "akim oda": "Eastern Region",
+    # Northern Region
+    "tamale": "Northern Region",
+    "yendi": "Northern Region",
+    "walewale": "Northern Region",
+    # Upper East Region
+    "bolgatanga": "Upper East Region",
+    "navrongo": "Upper East Region",
+    "bawku": "Upper East Region",
+    # Upper West Region
+    "wa": "Upper West Region",
+    "lawra": "Upper West Region",
+    # Volta Region
+    "ho": "Volta Region",
+    "hohoe": "Volta Region",
+    "keta": "Volta Region",
+    "anloga": "Volta Region",
+    # Bono Region
+    "sunyani": "Bono Region",
+    "berekum": "Bono Region",
+    # Bono East Region
+    "techiman": "Bono East Region",
+    "acherensua": "Bono East Region",
+    "atebubu": "Bono East Region",
+    "kintampo": "Bono East Region",
+    # Ahafo Region
+    "goaso": "Ahafo Region",
+    "kukuom": "Ahafo Region",
+    # Savannah Region
+    "damongo": "Savannah Region",
+    "bole": "Savannah Region",
+    # North East Region
+    "nalerigu": "North East Region",
+    "gambaga": "North East Region",
+    # Oti Region
+    "dambai": "Oti Region",
+    # Western North Region
+    "sefwi wiawso": "Western North Region",
+    "bibiani": "Western North Region",
+}
+
+
+def _infer_ghana_region(city: Optional[str]) -> Optional[str]:
+    """Lookup the Ghanaian region for a given city name (case-insensitive)."""
+    if not city:
+        return None
+    return _GHANA_CITY_REGION.get(city.strip().lower())
+
+
 def merge_extraction_results(
     extraction: Dict[str, Any],
     row: Dict[str, Any],
@@ -110,7 +203,9 @@ def merge_extraction_results(
         fac.address_city if fac else None, row.get("address_city")
     )
     state = _first_non_null(
-        fac.address_stateOrRegion if fac else None, row.get("address_stateOrRegion")
+        fac.address_stateOrRegion if fac else None,
+        row.get("address_stateOrRegion"),
+        _infer_ghana_region(city),  # deterministic lookup fallback
     )
     country = _first_non_null(
         fac.address_country if fac else None, row.get("address_country")
@@ -152,6 +247,21 @@ def merge_extraction_results(
         fac.capacity if fac else None,
         _try_int(row.get("capacity")),
     )
+    
+    # ── Text & Affiliations ──
+    desc = _first_non_null(
+        getattr(fac, "description", None) if fac else None,
+        getattr(org, "organizationDescription", None) if org else None,
+        row.get("description")
+    )
+    mission_statement = _first_non_null(
+        getattr(org, "missionStatement", None) if org else None,
+        row.get("missionStatement")
+    )
+    affiliation_types = _merge_arrays(
+        getattr(fac, "affiliationTypeIds", None) if fac else None,
+        _parse_csv_array(row.get("affiliationTypeIds")),
+    )
 
     # ── Removed Confidence & Suspicious logic per user request ──
 
@@ -179,6 +289,7 @@ def merge_extraction_results(
         "accepts_volunteers": _try_bool(accepts_volunteers),
         "number_doctors": _try_int(number_doctors),
         "capacity": _try_int(capacity),
+        "description": desc,
         "created_at": now,
         "updated_at": now,
     }

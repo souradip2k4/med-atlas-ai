@@ -14,7 +14,6 @@ from pyspark.sql.types import (
     StructField,
     StringType,
     IntegerType,
-    FloatType,
     BooleanType,
     ArrayType,
     TimestampType,
@@ -58,6 +57,8 @@ FACILITY_RECORDS_SCHEMA = StructType([
     StructField("accepts_volunteers", BooleanType(), nullable=True),
     StructField("number_doctors", IntegerType(), nullable=True),
     StructField("capacity", IntegerType(), nullable=True),
+    StructField("description", StringType(), nullable=True),
+
 
     # ── Timestamps ──
     StructField("created_at", TimestampType(), nullable=True),
@@ -77,8 +78,6 @@ FACILITY_FACTS_SCHEMA = StructType([
     StructField("source_text", StringType(), nullable=True),
 ])
 
-
-
 # ---------------------------------------------------------------------------
 # regional_insights — aggregated regional analytics
 # ---------------------------------------------------------------------------
@@ -88,10 +87,6 @@ REGIONAL_INSIGHTS_SCHEMA = StructType([
     StructField("city", StringType(), nullable=True),
     StructField("specialty", StringType(), nullable=True),
     StructField("facility_count", IntegerType(), nullable=True),
-    StructField("coverage_score", FloatType(), nullable=True),
-    StructField("gap_flag", BooleanType(), nullable=True),
-    StructField("risk_level", StringType(), nullable=True),
-    StructField("recommendation", StringType(), nullable=True),
     StructField("contributing_facility_ids", ArrayType(StringType()), nullable=True),
     StructField("contributing_source_row_ids", ArrayType(StringType()), nullable=True),
 ])

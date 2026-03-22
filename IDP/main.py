@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-main.py — End-to-end IDP pipeline orchestration.
+main.py — End-to-end IDP pipeline orchestration for Med-Atlas-AI.
 
 Stages
 ------
-1. Load CSV → ``raw_facilities`` Delta table
-2. Read rows, synthesize text (with normalization)
-3. Process each row through the 4-step LLM extraction chain
-4. Merge → ``facility_records``
-5. Generate atomic facts (with paraphrasing) → ``facility_facts``
-6. Generate embeddings (batched) → ``facility_embeddings``
-7. Aggregate regional insights → ``regional_insights``
-8. Create Vector Search index (precomputed embeddings)
+1. Initialize Database → Register schemas for target Delta tables
+2. Load CSV → Read structured raw data into memory
+3. Checkpoint → Identify which CSV rows have already been processed
+4. Extraction Chain → Process new rows through the 4-step LLM pipeline
+5. Merge & Shape → Consolidate LLM outputs into `facility_records`
+6. Fact Generation → Paraphrase and extract scalar facts into `facility_facts`
+7. Regional Insights → Aggregate macro analytics, save to `regional_insights`, 
+   and inject location-aware summary sentences into `facility_facts` for RAG.
 """
 
 import logging
@@ -216,20 +216,6 @@ def _compute_regional_insights(db) -> None:
             F.collect_set("facility_id").alias("contributing_facility_ids"),
             F.collect_set("source_row_id").alias("contributing_source_row_ids")
         )
-        .withColumn("coverage_score", F.lit(None).cast("float"))
-        .withColumn("gap_flag", F.when(F.col("facility_count") < 2, True).otherwise(False))
-        .withColumn(
-            "risk_level",
-            F.when(F.col("facility_count") == 1, "high")
-            .when(F.col("facility_count") < 3, "medium")
-            .otherwise("low"),
-        )
-        .withColumn(
-            "recommendation",
-            F.when(F.col("facility_count") == 1, "Single provider — consider capacity expansion")
-            .when(F.col("facility_count") < 3, "Limited coverage — monitor access")
-            .otherwise("Coverage appears adequate"),
-        )
     )
 
     import uuid
@@ -238,8 +224,7 @@ def _compute_regional_insights(db) -> None:
     # Select in schema order
     ordered = insights.select(
         "country", "state", "city", "specialty",
-        "facility_count", "coverage_score",
-        "gap_flag", "risk_level", "recommendation",
+        "facility_count",
         "contributing_facility_ids", "contributing_source_row_ids"
     )
 
@@ -256,16 +241,25 @@ def _compute_regional_insights(db) -> None:
         uuid_udf().alias("fact_id"),
         F.lit("REGIONAL_AGGREGATE").alias("facility_id"),
         
-        # Synthesize human-readable English sentences
-        F.concat(
-            F.lit("In "), 
-            F.coalesce(F.col("state"), F.lit("Unknown Region")), F.lit(", "), 
-            F.coalesce(F.col("city"), F.lit("Unknown City")), F.lit(" ("), 
-            F.coalesce(F.col("country"), F.lit("Ghana")), F.lit("), "),
-            F.lit("there are "), F.col("facility_count").cast(StringType()), 
-            F.lit(" facilities offering "), F.coalesce(F.col("specialty"), F.lit("general services")), 
-            F.lit(". Regional Risk Level: "), F.coalesce(F.col("risk_level"), F.lit("unknown")),
-            F.lit(". Strategic Recommendation: "), F.coalesce(F.col("recommendation"), F.lit("None"))
+        # Factual sentence — state only included when non-null, no "Unknown" fallback ever used
+        F.when(
+            F.col("state").isNotNull() & (F.length(F.trim(F.col("state"))) > 0),
+            # State is known: "In Western Region, Takoradi (Ghana), there are X facilities..."
+            F.concat(
+                F.lit("In "), F.trim(F.col("state")), F.lit(", "),
+                F.coalesce(F.trim(F.col("city")), F.lit("")),
+                F.when(F.col("country").isNotNull(), F.concat(F.lit(" ("), F.trim(F.col("country")), F.lit(")"))).otherwise(F.lit("")),
+                F.lit(", there are "), F.col("facility_count").cast(StringType()),
+                F.lit(" facilities offering "), F.coalesce(F.col("specialty"), F.lit("general services")), F.lit(".")
+            )
+        ).otherwise(
+            # State is unknown: "Takoradi (Ghana), there are X facilities..."
+            F.concat(
+                F.coalesce(F.trim(F.col("city")), F.lit("")),
+                F.when(F.col("country").isNotNull(), F.concat(F.lit(" ("), F.trim(F.col("country")), F.lit(")"))).otherwise(F.lit("")),
+                F.lit(", there are "), F.col("facility_count").cast(StringType()),
+                F.lit(" facilities offering "), F.coalesce(F.col("specialty"), F.lit("general services")), F.lit(".")
+            )
         ).alias("fact_text"),
         
         F.lit("regional_insight").alias("fact_type"),
