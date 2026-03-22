@@ -18,24 +18,24 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATES = {
     "procedure": [
-        "{facility} in {city}, {country} provides {item}",
-        "{facility} in {city}, {country} offers the procedure: {item}",
-        "The medical procedure {item} is performed at {facility} in {city}, {country}",
+        "{facility}{location} provides {item}",
+        "{facility}{location} offers the procedure: {item}",
+        "The medical procedure {item} is performed at {facility}{location}",
     ],
     "equipment": [
-        "{facility} in {city}, {country} has {item}",
-        "{facility} in {city}, {country} is equipped with {item}",
-        "Medical equipment at {facility} in {city}, {country} includes {item}",
+        "{facility}{location} has {item}",
+        "{facility}{location} is equipped with {item}",
+        "Medical equipment at {facility}{location} includes {item}",
     ],
     "capability": [
-        "{facility} in {city}, {country} supports {item}",
-        "{facility} in {city}, {country} has the capability: {item}",
-        "A clinical capability of {facility} in {city}, {country} is {item}",
+        "{facility}{location} supports {item}",
+        "{facility}{location} has the capability: {item}",
+        "A clinical capability of {facility}{location} is {item}",
     ],
     "specialty": [
-        "{facility} in {city}, {country} specializes in {item}",
-        "{facility} in {city}, {country} offers specialty care in {item}",
-        "Medical specialty {item} is available at {facility} in {city}, {country}",
+        "{facility}{location} specializes in {item}",
+        "{facility}{location} offers specialty care in {item}",
+        "Medical specialty {item} is available at {facility}{location}",
     ],
 }
 
@@ -85,8 +85,19 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
         "specialty": ("specialties", "specialties"),
     }
 
-    city = facility_record.get("city") or "Unknown City"
-    country = facility_record.get("country") or "Unknown Country"
+    city = facility_record.get("city")
+    state = facility_record.get("state")
+    country = facility_record.get("country")
+    
+    parts = []
+    if city:
+        parts.append(city.strip())
+    if state:
+        parts.append(state.strip())
+    if country:
+        parts.append(country.strip())
+        
+    loc_str = f" in {', '.join(parts)}" if parts else ""
 
     for fact_type, (field_key, source_col) in field_map.items():
         items = facility_record.get(field_key)
@@ -100,9 +111,9 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
                 continue
             item = item.strip()
 
-            # Generate paraphrased variants (2-3 per item) — all location-enriched
+            # Generate paraphrased variants (2-3 per item) — securely handling missing location
             for tmpl in templates:
-                fact_text = tmpl.format(facility=facility_name, item=item, city=city, country=country)
+                fact_text = tmpl.format(facility=facility_name, item=item, location=loc_str)
                 facts.append(_make_fact(
                     facility_id, source_row_id, fact_type,
                     fact_text, source_col, item,
@@ -115,7 +126,7 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     if capacity:
         facts.append(_make_fact(
             facility_id, source_row_id, "capacity",
-            f"{facility_name} has an inpatient capacity of {capacity} beds.",
+            f"{facility_name}{loc_str} has an inpatient capacity of {capacity} beds.",
             "capacity", str(capacity),
         ))
 
@@ -124,7 +135,7 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     if number_doctors:
         facts.append(_make_fact(
             facility_id, source_row_id, "workforce",
-            f"{facility_name} has {number_doctors} medical doctors on staff.",
+            f"{facility_name}{loc_str} has {number_doctors} medical doctors on staff.",
             "number_doctors", str(number_doctors),
         ))
 
@@ -133,7 +144,7 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     if org_type:
         facts.append(_make_fact(
             facility_id, source_row_id, "organization_type",
-            f"{facility_name} is a {org_type}.",
+            f"{facility_name}{loc_str} is a {org_type}.",
             "organization_type", org_type,
         ))
 
@@ -142,13 +153,13 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     if accepts_volunteers is True:
         facts.append(_make_fact(
             facility_id, source_row_id, "volunteers",
-            f"{facility_name} accepts clinical volunteers.",
+            f"{facility_name}{loc_str} accepts clinical volunteers.",
             "accepts_volunteers", "true",
         ))
     elif accepts_volunteers is False:
         facts.append(_make_fact(
             facility_id, source_row_id, "volunteers",
-            f"{facility_name} does not currently accept clinical volunteers.",
+            f"{facility_name}{loc_str} does not currently accept clinical volunteers.",
             "accepts_volunteers", "false",
         ))
 
@@ -157,22 +168,32 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     if year_established:
         facts.append(_make_fact(
             facility_id, source_row_id, "history",
-            f"{facility_name} was established in {year_established}.",
+            f"{facility_name}{loc_str} was established in {year_established}.",
             "year_established", str(year_established),
         ))
 
     # Location
-    city = facility_record.get("city")
-    country = facility_record.get("country")
     address_line1 = facility_record.get("address_line1")
-    if city and country:
-        if address_line1:
-            location_text = f"{facility_name} is located at {address_line1}, {city}, {country}."
+    address_line2 = facility_record.get("address_line2")
+    address_line3 = facility_record.get("address_line3")
+
+    addr_parts = []
+    if address_line1: addr_parts.append(address_line1.strip())
+    if address_line2: addr_parts.append(address_line2.strip())
+    if address_line3: addr_parts.append(address_line3.strip())
+
+    full_street_address = ", ".join(addr_parts)
+
+    if loc_str:
+        if full_street_address:
+            location_text = f"{facility_name} is located at {full_street_address}{loc_str}."
         else:
-            location_text = f"{facility_name} is located in {city}, {country}."
+            location_text = f"{facility_name} is located{loc_str}."
+            
+        provenance_str = f"{full_street_address or ''}{loc_str}".strip(", ")
         facts.append(_make_fact(
             facility_id, source_row_id, "location",
-            location_text, "address", f"{address_line1 or ''}, {city}, {country}".strip(", "),
+            location_text, "address", provenance_str,
         ))
 
     # Description
@@ -180,8 +201,46 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     if desc:
         facts.append(_make_fact(
             facility_id, source_row_id, "description",
-            f"Description of {facility_name}: {desc}",
+            f"Description of {facility_name}{loc_str}: {desc}",
             "description", desc,
+        ))
+
+    # Mission Statement
+    mission = facility_record.get("mission_statement")
+    if mission:
+        facts.append(_make_fact(
+            facility_id, source_row_id, "mission_statement",
+            f"The mission statement of {facility_name}{loc_str} is: {mission}",
+            "mission_statement", mission,
+        ))
+
+    # Affiliation Types
+    affiliations = facility_record.get("affiliation_types")
+    if affiliations:
+        affiliations_str = ", ".join(affiliations)
+        facts.append(_make_fact(
+            facility_id, source_row_id, "affiliation",
+            f"{facility_name}{loc_str} is affiliated with the following types: {affiliations_str}.",
+            "affiliation_types", affiliations_str,
+        ))
+
+    # Operator Type
+    operator_type = facility_record.get("operator_type")
+    if operator_type:
+        op_text = "privately operated" if operator_type == "private" else "publicly operated"
+        facts.append(_make_fact(
+            facility_id, source_row_id, "organization_type",
+            f"{facility_name}{loc_str} is {op_text}.",
+            "operator_type", operator_type,
+        ))
+        
+    # Facility Type
+    facility_type = facility_record.get("facility_type")
+    if facility_type:
+        facts.append(_make_fact(
+            facility_id, source_row_id, "organization_type",
+            f"{facility_name}{loc_str} is classified as a {facility_type}.",
+            "facility_type", facility_type,
         ))
 
     if not facts:

@@ -58,6 +58,10 @@ FACILITY_RECORDS_SCHEMA = StructType([
     StructField("number_doctors", IntegerType(), nullable=True),
     StructField("capacity", IntegerType(), nullable=True),
     StructField("description", StringType(), nullable=True),
+    StructField("mission_statement", StringType(), nullable=True),
+    StructField("affiliation_types", ArrayType(StringType()), nullable=True),
+    StructField("operator_type", StringType(), nullable=True),
+    StructField("facility_type", StringType(), nullable=True),
 
 
     # ── Timestamps ──
