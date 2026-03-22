@@ -109,7 +109,14 @@ class BaseOrganization(BaseModel):
     )
     address_stateOrRegion: Optional[str] = Field(
         None,
-        description="State, region, or province of the organization. Parse from comma-separated location strings if needed.",
+        description=(
+            "State, region, or province of the organization. "
+            "Parse from the source text if explicitly stated. "
+            "If NOT stated, INFER it from the city and country using your geographical knowledge "
+            "(e.g. Accra, Ghana → 'Greater Accra Region'; Takoradi, Ghana → 'Western Region'; "
+            "Kumasi, Ghana → 'Ashanti Region'). "
+            "Always provide a value when the city and country are known."
+        ),
     )
     address_zipOrPostcode: Optional[str] = Field(
         None, description="ZIP or postal code of the organization"

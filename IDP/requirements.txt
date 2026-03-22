@@ -6,6 +6,4 @@ langchain-databricks>=0.1.0
 langchain-core>=0.2.0
 python-dotenv>=1.0.0
 pandas>=2.0
-uvicorn>=0.20.0,<1
-PyYAML>=6.0.1
 mlflow-skinny>=2.11.3
