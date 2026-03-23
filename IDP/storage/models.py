@@ -25,7 +25,6 @@ from pyspark.sql.types import (
 FACILITY_RECORDS_SCHEMA = StructType([
     # ── Identity ──
     StructField("facility_id", StringType(), nullable=False),
-    StructField("source_row_id", StringType(), nullable=False),
 
     # ── Core ──
     StructField("facility_name", StringType(), nullable=False),
@@ -77,8 +76,6 @@ FACILITY_FACTS_SCHEMA = StructType([
     StructField("facility_id", StringType(), nullable=False),
     StructField("fact_text", StringType(), nullable=False),
     StructField("fact_type", StringType(), nullable=False),
-    StructField("source_row_id", StringType(), nullable=False),
-    StructField("source_column", StringType(), nullable=True),
     StructField("source_text", StringType(), nullable=True),
 ])
 
@@ -89,8 +86,10 @@ REGIONAL_INSIGHTS_SCHEMA = StructType([
     StructField("country", StringType(), nullable=True),
     StructField("state", StringType(), nullable=True),
     StructField("city", StringType(), nullable=True),
-    StructField("specialty", StringType(), nullable=True),
+    StructField("insight_category", StringType(), nullable=False),
+    StructField("insight_value", StringType(), nullable=False),
     StructField("facility_count", IntegerType(), nullable=True),
+    StructField("total_beds", IntegerType(), nullable=True),
+    StructField("total_doctors", IntegerType(), nullable=True),
     StructField("contributing_facility_ids", ArrayType(StringType()), nullable=True),
-    StructField("contributing_source_row_ids", ArrayType(StringType()), nullable=True),
 ])
