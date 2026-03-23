@@ -275,8 +275,7 @@ def merge_extraction_results(
     # ── Removed Confidence & Suspicious logic per user request ──
 
     return {
-        "facility_id": str(uuid.uuid4()),
-        "source_row_id": source_row_id,
+        "facility_id": source_row_id if source_row_id else str(uuid.uuid4()),
         "facility_name": facility_name,
         "organization_type": org_type,
         "specialties": specialties or None,

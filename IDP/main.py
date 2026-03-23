@@ -70,8 +70,8 @@ def main() -> None:
     processed_ids = set()
     if db._table_exists("facility_records"):
         try:
-            existing_df = db.read_delta("facility_records").select("source_row_id")
-            processed_ids = {r["source_row_id"] for r in existing_df.collect()}
+            existing_df = db.read_delta("facility_records").select("facility_id")
+            processed_ids = {r["facility_id"] for r in existing_df.collect()}
             logger.info("Checkpoint: Found %d already processed rows in facility_records", len(processed_ids))
         except Exception as e:
             logger.warning("Could not read existing facility_records for checkpointing: %s", e)
@@ -194,96 +194,95 @@ def main() -> None:
 # ── Regional insights aggregation ────────────────────────────────────────
 
 def _compute_regional_insights(db) -> None:
-    """Aggregate facility_records into regional_insights."""
+    """Aggregate facility_records into multi-dimensional regional_insights."""
     try:
         records_df = db.read_delta("facility_records")
     except Exception:
         logger.warning("facility_records not found — skipping regional insights")
         return
 
-    # Explode specialties and group by country/state/city/specialty
-    exploded = (
-        records_df
-        .select("facility_id", "source_row_id", "country", "state", "city", "specialties")
-        .withColumn("specialty", F.explode_outer(F.col("specialties")))
+    # Base select needed for all aggregations
+    base_df = records_df.select(
+        "facility_id", "country", "state", "city", 
+        "capacity", "number_doctors", "operator_type",
+        "specialties", "procedures", "equipment", "capabilities"
     )
+    
+    insights_dfs = []
 
-    insights = (
-        exploded
-        .groupBy("country", "state", "city", "specialty")
-        .agg(
+    # 1. OVERVIEW (Totals per region)
+    overview_df = base_df.groupBy("country", "state", "city").agg(
+        F.countDistinct("facility_id").alias("facility_count"),
+        F.sum("capacity").alias("total_beds"),
+        F.sum("number_doctors").alias("total_doctors"),
+        F.collect_set("facility_id").alias("contributing_facility_ids")
+    )
+    overview_df = overview_df.select(
+        "country", "state", "city",
+        F.lit("overview").alias("insight_category"),
+        F.lit("all_facilities").alias("insight_value"),
+        "facility_count", "total_beds", "total_doctors", "contributing_facility_ids"
+    )
+    insights_dfs.append(overview_df)
+
+    # 2. OPERATOR TYPE
+    operator_df = base_df.filter(F.col("operator_type").isNotNull()).groupBy("country", "state", "city", "operator_type").agg(
+        F.countDistinct("facility_id").alias("facility_count"),
+        F.sum("capacity").alias("total_beds"),
+        F.sum("number_doctors").alias("total_doctors"),
+        F.collect_set("facility_id").alias("contributing_facility_ids")
+    )
+    operator_df = operator_df.select(
+        "country", "state", "city",
+        F.lit("operator").alias("insight_category"),
+        F.col("operator_type").alias("insight_value"),
+        "facility_count", "total_beds", "total_doctors", "contributing_facility_ids"
+    )
+    insights_dfs.append(operator_df)
+
+    # Helper function for array explosions (total_beds and total_doctors are set to NULL to prevent statistical overcounting)
+    def _explode_and_agg(column_name: str, category_name: str):
+        exploded = base_df.withColumn("item", F.explode_outer(F.col(column_name))).filter(F.col("item").isNotNull())
+        grouped = exploded.groupBy("country", "state", "city", "item").agg(
             F.countDistinct("facility_id").alias("facility_count"),
-            F.collect_set("facility_id").alias("contributing_facility_ids"),
-            F.collect_set("source_row_id").alias("contributing_source_row_ids")
+            F.collect_set("facility_id").alias("contributing_facility_ids")
         )
+        from pyspark.sql.types import IntegerType
+        return grouped.select(
+            "country", "state", "city",
+            F.lit(category_name).alias("insight_category"),
+            F.col("item").alias("insight_value"),
+            "facility_count",
+            F.lit(None).cast(IntegerType()).alias("total_beds"),
+            F.lit(None).cast(IntegerType()).alias("total_doctors"),
+            "contributing_facility_ids"
+        )
+
+    # 3. SPECIALTIES
+    insights_dfs.append(_explode_and_agg("specialties", "specialty"))
+    # 4. PROCEDURES
+    insights_dfs.append(_explode_and_agg("procedures", "procedure"))
+    # 5. EQUIPMENT
+    insights_dfs.append(_explode_and_agg("equipment", "equipment"))
+    # 6. CAPABILITIES
+    insights_dfs.append(_explode_and_agg("capabilities", "capability"))
+
+    # Union all slices together
+    final_insights = insights_dfs[0]
+    for df in insights_dfs[1:]:
+        final_insights = final_insights.unionByName(df)
+
+    # Save exactly to the BI schema order
+    ordered = final_insights.select(
+        "country", "state", "city", 
+        "insight_category", "insight_value", 
+        "facility_count", "total_beds", "total_doctors", 
+        "contributing_facility_ids"
     )
 
-    import uuid
-    from pyspark.sql.types import StringType
-
-    # Select in schema order
-    ordered = insights.select(
-        "country", "state", "city", "specialty",
-        "facility_count",
-        "contributing_facility_ids", "contributing_source_row_ids"
-    )
-
-    # 1. Save numerical table for BI dashboards
     db.write_delta(ordered, "regional_insights")
     row_count = ordered.count()
-    logger.info("regional_insights: %d rows", row_count)
-
-    # 2. Define a UDF to generate UUIDs for the facts
-    uuid_udf = F.udf(lambda: str(uuid.uuid4()), StringType())
-
-    # 3. Shape the insights into the facility_facts schema for Vector Search
-    insights_facts = ordered.select(
-        uuid_udf().alias("fact_id"),
-        F.lit("REGIONAL_AGGREGATE").alias("facility_id"),
-        
-        # Factual sentence — state only included when non-null, no "Unknown" fallback ever used
-        F.when(
-            F.col("state").isNotNull() & (F.length(F.trim(F.col("state"))) > 0),
-            # State is known: "In Western Region, Takoradi (Ghana), there are X facilities..."
-            F.concat(
-                F.lit("In "), F.trim(F.col("state")), F.lit(", "),
-                F.coalesce(F.trim(F.col("city")), F.lit("")),
-                F.when(F.col("country").isNotNull(), F.concat(F.lit(" ("), F.trim(F.col("country")), F.lit(")"))).otherwise(F.lit("")),
-                F.lit(", there are "), F.col("facility_count").cast(StringType()),
-                F.lit(" facilities offering "), F.coalesce(F.col("specialty"), F.lit("general services")), F.lit(".")
-            )
-        ).otherwise(
-            # State is unknown: "Takoradi (Ghana), there are X facilities..."
-            F.concat(
-                F.coalesce(F.trim(F.col("city")), F.lit("")),
-                F.when(F.col("country").isNotNull(), F.concat(F.lit(" ("), F.trim(F.col("country")), F.lit(")"))).otherwise(F.lit("")),
-                F.lit(", there are "), F.col("facility_count").cast(StringType()),
-                F.lit(" facilities offering "), F.coalesce(F.col("specialty"), F.lit("general services")), F.lit(".")
-            )
-        ).alias("fact_text"),
-        
-        F.lit("regional_insight").alias("fact_type"),
-        
-        # Collapse the array into a comma-separated string of CSV row IDs (e.g. "15, 30, 42")
-        F.concat_ws(",", F.col("contributing_source_row_ids")).alias("source_row_id"),
-        
-        F.lit("regional_aggregation").alias("source_column"),
-        
-        # Clean mathematical statement instead of hacking UUIDs here
-        F.lit("Aggregated mathematically").alias("source_text")
-    )
-
-    # 4. Delete old regional insights to prevent accidental duplication
-    if db._table_exists("facility_facts"):
-        try:
-            db.execute_sql(f"DELETE FROM {db.fqn('facility_facts')} WHERE fact_type = 'regional_insight'")
-            logger.info("Deleted old regional_insights from facility_facts.")
-        except Exception as e:
-            logger.warning("Could not delete old regional_insights from facility_facts: %s", e)
-
-    # 5. Append directly to the facts table!
-    db.append_delta(insights_facts, "facility_facts")
-    logger.info("Injected %d regional insights directly into facility_facts for Vector Search.", row_count)
+    logger.info("regional_insights (BI Table): %d multi-dimensional rows generated.", row_count)
 
 
 # ── Summary ──────────────────────────────────────────────────────────────
