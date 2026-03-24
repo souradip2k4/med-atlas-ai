@@ -204,14 +204,14 @@ def merge_extraction_results(
     )
     state = _first_non_null(
         fac.address_stateOrRegion if fac else None,
-        row.get("address_stateOrRegion"),
+        row.get("address_stateorregion"),
         _infer_ghana_region(city),  # deterministic lookup fallback
     )
     country = _first_non_null(
         fac.address_country if fac else None, row.get("address_country")
     )
     country_code = _first_non_null(
-        fac.address_countryCode if fac else None, row.get("address_countryCode")
+        fac.address_countryCode if fac else None, row.get("address_countrycode")
     )
 
     # ── Contact ──
@@ -227,21 +227,21 @@ def merge_extraction_results(
         _parse_csv_array(row.get("websites")),
     )
     official_website = _first_non_null(
-        fac.officialWebsite if fac else None, row.get("officialWebsite")
+        fac.officialWebsite if fac else None, row.get("officialwebsite")
     )
 
     # ── Meta ──
     year_established = _first_non_null(
         fac.yearEstablished if fac else None,
-        _try_int(row.get("yearEstablished")),
+        _try_int(row.get("yearestablished")),
     )
     accepts_volunteers = _first_non_null(
         fac.acceptsVolunteers if fac else None,
-        _try_bool(row.get("acceptsVolunteers")),
+        _try_bool(row.get("acceptsvolunteers")),
     )
     number_doctors = _first_non_null(
         fac.numberDoctors if fac else None,
-        _try_int(row.get("numberDoctors")),
+        _try_int(row.get("numberdoctors")),
     )
     capacity = _first_non_null(
         fac.capacity if fac else None,
@@ -256,19 +256,19 @@ def merge_extraction_results(
     )
     mission_statement = _first_non_null(
         getattr(org, "missionStatement", None) if org else None,
-        row.get("missionStatement")
+        row.get("missionstatement")
     )
     affiliation_types = _merge_arrays(
         getattr(fac, "affiliationTypeIds", None) if fac else None,
-        _parse_csv_array(row.get("affiliationTypeIds")),
+        _parse_csv_array(row.get("affiliationtypeids")),
     )
     operator_type = _first_non_null(
         getattr(fac, "operatorTypeId", None) if fac else None,
-        row.get("operatorTypeId")
+        row.get("operatortypeid")
     )
     facility_type = _first_non_null(
         getattr(fac, "facilityTypeId", None) if fac else None,
-        row.get("facilityTypeId"),
+        row.get("facilitytypeid"),
         row.get("classification")
     )
 
