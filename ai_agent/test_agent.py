@@ -12,10 +12,10 @@ _dot = Path(__file__).parent.parent / ".env"
 load_dotenv(_dot)
 
 from .agent import AGENT, MedAtlasAgent, ALL_TOOLS
-from mlflow.types.responses import ResponsesAgentRequest, ChatContext
+from mlflow.types.responses import ResponsesRequest, ChatContext
 
-def make_request(question: str) -> ResponsesAgentRequest:
-    return ResponsesAgentRequest(
+def make_request(question: str) -> ResponsesRequest:
+    return ResponsesRequest(
         input=[{"role": "user", "content": question}],
         context=ChatContext(user_id="test@example.com"),
     )

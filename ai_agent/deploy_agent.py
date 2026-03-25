@@ -1,94 +1,172 @@
 """
-Deploy MedAtlasAgent to Databricks Model Serving.
+Med-Atlas-AI — FastAPI REST API Server
+======================================
+Wraps the MedAtlasAgent for REST access. MLflow integration is preserved
+so agent traces are captured for evaluation.
 
-Usage:
-  1. Create UC function first (if not already):
-       uv run python agent/run_sql.py agent/setup_uc_function.sql
+Run locally:
+  uv run uvicorn ai_agent.deploy_agent:app --reload --port 8000
 
-  2. Run this script:
-       uv run python agent/deploy_agent.py
-
-Steps:
-  - Register the agent as an MLflow pyfunc model in Unity Catalog
-  - Deploy to a Databricks serving endpoint via agents.deploy()
+Endpoints:
+  POST /invoke   — call the agent (same as AGENT.predict in test_agent.py)
+  GET  /health   — health check
+  GET  /tools    — list available tools
 """
 
+from __future__ import annotations
+
 import os
-from pathlib import Path
-from dotenv import load_dotenv
-# Import agent — sets model via set_model(AGENT) at bottom of agent.py
-from .agent import AGENT, LLM_ENDPOINT
+from contextlib import asynccontextmanager
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+# Same pattern as test_agent.py: import AGENT and ResponsesRequest
+from ai_agent.agent import AGENT, ALL_TOOLS, LLM_ENDPOINT
+from mlflow.types.responses import ResponsesRequest, ChatContext
 
 
-_dot = Path(__file__).parent.parent / ".env"
-load_dotenv(_dot)
+# ── Pydantic request/response models ──────────────────────────────────────────
 
-import mlflow
-from mlflow.models.resources import DatabricksServingEndpoint
-from mlflow.models.signature import ModelSignature
-from mlflow.types import ColSpec, DataType, Schema
+class Message(BaseModel):
+    role: str = Field(..., description="'system' or 'user'")
+    content: str
 
-CATALOG = os.environ.get("CATALOG", "med_atlas_ai")
-REGISTERED_NAME = f"{CATALOG}.agent.med_atlas_agent"
-ENDPOINT_NAME = "med-atlas-agent-endpoint"
 
-mlflow.set_registry_uri("databricks-uc")
+class InvokeRequest(BaseModel):
+    messages: list[Message] = Field(..., description="Conversation messages")
+    user_id: str | None = Field(default="api-user", description="User identifier for tracing")
 
-# ── Patch MLflow validator to allow dots in UC model names ────────────────────
-import mlflow.utils.validation as _mlflow_val
-_orig_validate = _mlflow_val._validate_logged_model_name
 
-def _patched_validate(name):
-    if name and "." in name:
-        return  # UC names are catalog.schema.model — dots are required
-    _orig_validate(name)
+class InvokeResponse(BaseModel):
+    output: list[dict[str, Any]]
+    agent: str = "MedAtlasAgent"
+    endpoint: str = "fastapi"
 
-_mlflow_val._validate_logged_model_name = _patched_validate
 
-# ── Register model ──────────────────────────────────────────────────────────
-# ResponsesAgent inherits from PythonModel — use pyfunc flavor
-signature = ModelSignature(
-    inputs=Schema([ColSpec(DataType.string, "input")]),
-    outputs=Schema([ColSpec(DataType.string, "output")]),
+class HealthResponse(BaseModel):
+    status: str
+    agent: str
+    llm_endpoint: str
+    tools: list[str]
+
+
+# ── Lifespan ───────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("MedAtlasAgent FastAPI server starting...")
+    print(f"  LLM endpoint: {LLM_ENDPOINT}")
+    print(f"  Tools:        {[t.name for t in ALL_TOOLS]}")
+    yield
+    print("MedAtlasAgent FastAPI server shutting down.")
+
+
+# ── FastAPI app ───────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Med-Atlas-AI API",
+    description="Healthcare infrastructure Q&A agent for Ghanaian medical facilities.",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-resources = [
-    DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT),
-]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-print(f"Logging agent to UC: {REGISTERED_NAME}")
-with mlflow.start_run(run_name="med-atlas-agent-deploy"):
-    model_info = mlflow.pyfunc.log_model(
-        python_model=AGENT,
-        artifact_path="med_atlas_agent",
-        signature=signature,
-        resources=resources,
-        pip_requirements=[
-            "mlflow-skinny>=2.11.3",
-            "databricks-langchain>=0.1.0",
-            "langchain-core>=0.2.0",
-            "langgraph>=0.3.0",
-        ],
-        registered_model_name=REGISTERED_NAME,
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/health", response_model=HealthResponse)
+def health():
+    """Health check."""
+    return HealthResponse(
+        status="ok",
+        agent="MedAtlasAgent",
+        llm_endpoint=LLM_ENDPOINT,
+        tools=[t.name for t in ALL_TOOLS],
     )
 
-print(f"Model registered: {REGISTERED_NAME} v{model_info.registered_model_version}")
 
-# ── Deploy ────────────────────────────────────────────────────────────────
-from databricks import agents
+@app.get("/tools")
+def list_tools():
+    """List all available tools."""
+    return {
+        "tools": [
+            {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.args_schema.schema() if t.args_schema else {},
+            }
+            for t in ALL_TOOLS
+        ]
+    }
 
-print(f"\nDeploying to endpoint: {ENDPOINT_NAME}")
-deployment = agents.deploy(
-    REGISTERED_NAME,
-    model_version=int(model_info.registered_model_version),
-    endpoint_name=ENDPOINT_NAME,
-    tags={"source": "mcp", "team": "med-atlas"},
-)
 
-print(f"\nDeployment initiated!")
-print(f"  Endpoint: {deployment.endpoint_name}")
-print(f"  Query:    {deployment.query_endpoint}")
-print(f"  Review:   {deployment.endpoint_url}")
-print(f"\nDeployment takes ~15 minutes. Check status:")
-print(f"  uv run python -c \"from databricks.agents import get_deployments; "
-      f"print(get_deployments('{REGISTERED_NAME}'))\"")
+@app.post("/invoke", response_model=InvokeResponse)
+def invoke(request: InvokeRequest):
+    """
+    Invoke the MedAtlasAgent.
+
+    Mirrors the test_agent.py pattern:
+      req = ResponsesRequest(input=[...], context=ChatContext(...))
+      resp = AGENT.predict(req)
+
+    Example:
+      {
+        "messages": [{"role": "user", "content": "How many hospitals in Ashanti?"}]
+      }
+    """
+    try:
+        # Build ResponsesRequest — same as test_agent.py
+        req = ResponsesRequest(
+            input=[m.model_dump() for m in request.messages],
+            context=ChatContext(user_id=request.user_id or "api-user"),
+        )
+
+        # Call agent — same as test_agent.py
+        resp = AGENT.predict(req)
+
+        # Extract output items from ResponsesResponse.output
+        output_items = []
+        for out in resp.output:
+            item = {"type": getattr(out, "type", "unknown")}
+            # Extract content from the nested content list if present
+            if hasattr(out, "content") and out.content:
+                texts = []
+                for c in out.content:
+                    if hasattr(c, "text"):
+                        texts.append(c.text)
+                    elif isinstance(c, dict) and "text" in c:
+                        texts.append(c["text"])
+                if texts:
+                    item["content"] = "\n".join(texts)
+            elif hasattr(out, "content") and not out.content:
+                item["content"] = ""
+            output_items.append(item)
+
+        return InvokeResponse(output=output_items)
+
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Run locally ────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(
+        "ai_agent.deploy_agent:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False,
+    )
