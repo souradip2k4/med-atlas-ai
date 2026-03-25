@@ -8,12 +8,14 @@ dependencies = [
     "databricks-connect>=14.3",
     "databricks-sdk>=0.28.0",
     "databricks-vectorsearch>=0.40",
-    "langchain-core>=0.2.0",
-    "langchain-databricks>=0.1.0",
+    "databricks-langchain>=0.1.0",
+    "langchain-core>=0.3.29",
+    "langgraph>=0.3.0",
     "mlflow-skinny>=2.11.3",
     "pandas>=2.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0.0",
+    "databricks-agents>=0.20.0",
 ]
 
 [tool.ruff]
