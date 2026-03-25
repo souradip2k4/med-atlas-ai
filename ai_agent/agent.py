@@ -77,7 +77,7 @@ def genie_chat_tool(query: str) -> str:
 # ─── Tool 2 — Vector Search ───────────────────────────────────────────────────
 
 @tool
-def vector_search_tool(query: str, fact_types: list[str] | None = None) -> str:
+def vector_search_tool(query: str, fact_types: list[str] | str | None = None) -> str:
     """
     Semantic search over pre-generated facility facts.
 
@@ -85,27 +85,42 @@ def vector_search_tool(query: str, fact_types: list[str] | None = None) -> str:
     "similar to [name]", specialized services, capabilities, equipment.
 
     Args:
-        query:     Natural language search query
-        fact_types: Filter to specific fact types. Valid: summary, procedure,
-                    equipment, capability, specialty. If None, searches all.
+        query:      Natural language search query
+        fact_types: Optional filter to specific fact types.
+                    Valid values: procedure, capability, specialty, summary, equipment.
+                    Pass a list like ["procedure"] or a single string like "procedure".
+                    If None, searches across all fact types.
     """
     from databricks_langchain import VectorSearchRetrieverTool
 
+    # Coerce str → list so LLM can pass either format without error
+    if isinstance(fact_types, str):
+        fact_types = [fact_types]
+
+    # Only include columns that exist in the index
     kwargs = {
         "index_name": VS_INDEX,
         "num_results": 15,
-        "columns": [
-            "fact_id", "facility_id",
-            "fact_text", "fact_type", "source_text"
-        ]
+        "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
     }
-    
-    if fact_types:
-        kwargs["filters"] = {"fact_type": {"$in": fact_types}}
+
+    # Standard endpoint filter syntax: flat equality dict (not $in)
+    # Use the first fact_type if provided; for multi-type, no filter is applied
+    if fact_types and len(fact_types) == 1:
+        kwargs["filters"] = {"fact_type": fact_types[0]}
+    # For multiple fact_types: no server-side filter (all types searched), then post-filter
+    post_filter_types = set(fact_types) if fact_types and len(fact_types) > 1 else None
 
     try:
         vs = VectorSearchRetrieverTool(**kwargs)
-        return vs.invoke({"query": query})
+        results = vs.invoke({"query": query})
+        # Post-filter if multiple fact_types were requested
+        if post_filter_types and isinstance(results, list):
+            results = [
+                doc for doc in results
+                if doc.metadata.get("fact_type") in post_filter_types
+            ]
+        return results
     except Exception as exc:
         return f"[Vector Search Error] {exc}"
 
