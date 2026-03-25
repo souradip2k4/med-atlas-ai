@@ -22,6 +22,9 @@ import os
 from pathlib import Path
 from typing import Annotated, Generator, Sequence, TypedDict
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # LangGraph
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -35,11 +38,13 @@ from langchain_core.tools import tool
 # MLflow ResponsesAgent
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import (
-    ResponsesAgentRequest,
-    ResponsesAgentResponse,
-    ResponsesAgentStreamEvent,
-    output_to_responses_items_stream,
-    to_chat_completions_input,
+    ResponsesRequest,
+    ResponsesResponse,
+    ResponsesStreamEvent,
+    ResponseOutputItemDoneEvent,
+    OutputItem,
+    Content,
+    ResponseOutputText,
 )
 
 # Databricks integrations
@@ -67,10 +72,7 @@ def genie_chat_tool(query: str) -> str:
     """
     from databricks_langchain import GenieAgent
 
-    agent = GenieAgent(
-        genie_space_id=GENIE_ID,
-        return_pandas=False,
-    )
+    agent = GenieAgent(GENIE_ID)
     return agent.invoke({"messages": [{"role": "user", "content": query}]})
 
 
@@ -151,7 +153,7 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
 
     Returns: Structured JSON with findings, severity, and recommendations.
     """
-    from databricks_langchain import UCFunctionToolkit
+    from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
 
     CAT = CATALOG
     SCH = SCHEMA
@@ -243,23 +245,51 @@ class MedAtlasAgent(ResponsesAgent):
     def __init__(self):
         self.graph = build_graph()
 
-    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
+    def predict(self, request: ResponsesRequest) -> ResponsesResponse:
         outputs = [
             event.item
             for event in self.predict_stream(request)
             if event.type == "response.output_item.done"
         ]
-        return ResponsesAgentResponse(output=outputs)
+        return ResponsesResponse(output=outputs)
 
     def predict_stream(
-        self, request: ResponsesAgentRequest
-    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
-        messages = to_chat_completions_input([m.model_dump() for m in request.input])
+        self, request: ResponsesRequest
+    ) -> Generator[ResponsesStreamEvent, None, None]:
+        # Build messages from input (supports list of dicts or Message objects)
+        if isinstance(request.input, str):
+            messages = [{"role": "user", "content": request.input}]
+        else:
+            messages = [
+                m.model_dump() if hasattr(m, "model_dump") else m
+                for m in request.input
+            ]
+
+        output_index = 0
         for event in self.graph.stream({"messages": messages}, stream_mode=["updates"]):
             if event[0] == "updates":
                 for node_data in event[1].values():
                     if isinstance(node_data, dict) and node_data.get("messages"):
-                        yield from output_to_responses_items_stream(node_data["messages"])
+                        for msg in node_data["messages"]:
+                            content = msg.content if hasattr(msg, "content") else str(msg)
+                            # Build OutputItem with type="message" (requires id, content, role)
+                            item = OutputItem(
+                                type="message",
+                                id=f"msg_{output_index}",
+                                role="assistant",
+                                content=[
+                                    Content(
+                                        type="output_text",
+                                        text=content or "",
+                                    )
+                                ],
+                            )
+                            yield ResponseOutputItemDoneEvent(
+                                item=item,
+                                output_index=output_index,
+                                type="response.output_item.done",
+                            )
+                            output_index += 1
 
 
 # ─── Export ────────────────────────────────────────────────────────────────────
