@@ -9,7 +9,6 @@ dependencies = [
     "databricks-sdk>=0.102.0",
     "databricks-vectorsearch>=0.40",
     "databricks-langchain>=0.3.0",
-    "langchain-databricks>=0.1.2",
     "langchain-core>=0.3.83",
     "langgraph>=1.0.1",
     "pandas>=2.0",
@@ -18,7 +17,7 @@ dependencies = [
     "databricks-agents>=0.20.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
-    "mlflow>=2.22.4",
+    "mlflow==3.10.1",
 ]
 
 [tool.ruff]
