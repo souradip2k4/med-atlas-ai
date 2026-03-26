@@ -22,9 +22,6 @@ import os
 from pathlib import Path
 from typing import Annotated, Generator, Sequence, TypedDict
 
-from dotenv import load_dotenv
-load_dotenv()
-
 # LangGraph
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -38,19 +35,24 @@ from langchain_core.tools import tool
 # MLflow ResponsesAgent
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import (
-    ResponsesRequest,
-    ResponsesResponse,
-    ResponsesStreamEvent,
-    ResponseOutputItemDoneEvent,
-    OutputItem,
-    Content,
-    ResponseOutputText,
+    ResponsesAgentRequest,
+    ResponsesAgentResponse,
+    ResponsesAgentStreamEvent,
+    output_to_responses_items_stream,
+    to_chat_completions_input,
 )
 
 # Databricks integrations
 from databricks_langchain import ChatDatabricks
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
+
+from dotenv import load_dotenv
+_env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(_env_path)
+
+os.environ["DATABRICKS_DISABLE_NOTICE"] = "true"
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
 
 LLM_ENDPOINT  = os.environ["LLM_ENDPOINT"]
 VS_INDEX     = os.environ.get("VS_INDEX", "med_atlas_ai.default.facility_facts_index")
@@ -79,7 +81,7 @@ def genie_chat_tool(query: str) -> str:
 # ─── Tool 2 — Vector Search ───────────────────────────────────────────────────
 
 @tool
-def vector_search_tool(query: str, fact_types: list[str] | str | None = None) -> str:
+def vector_search_tool(query: str, fact_types: list[str] | str | None = None)-> str:
     """
     Semantic search over pre-generated facility facts.
 
@@ -94,18 +96,19 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
                     If None, searches across all fact types.
     """
     from databricks_langchain import VectorSearchRetrieverTool
-
     # Coerce str → list so LLM can pass either format without error
     if isinstance(fact_types, str):
         fact_types = [fact_types]
-
-    # Only include columns that exist in the index
+        
     kwargs = {
         "index_name": VS_INDEX,
         "num_results": 15,
-        "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
+         "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
     }
-
+    
+    if fact_types:
+        kwargs["filters"] = {"fact_type": {"$in": fact_types}}
+        
     # Standard endpoint filter syntax: flat equality dict (not $in)
     # Use the first fact_type if provided; for multi-type, no filter is applied
     if fact_types and len(fact_types) == 1:
@@ -245,54 +248,27 @@ class MedAtlasAgent(ResponsesAgent):
     def __init__(self):
         self.graph = build_graph()
 
-    def predict(self, request: ResponsesRequest) -> ResponsesResponse:
+    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
         outputs = [
             event.item
             for event in self.predict_stream(request)
             if event.type == "response.output_item.done"
         ]
-        return ResponsesResponse(output=outputs)
+        return ResponsesAgentResponse(output=outputs)
 
     def predict_stream(
-        self, request: ResponsesRequest
-    ) -> Generator[ResponsesStreamEvent, None, None]:
-        # Build messages from input (supports list of dicts or Message objects)
-        if isinstance(request.input, str):
-            messages = [{"role": "user", "content": request.input}]
-        else:
-            messages = [
-                m.model_dump() if hasattr(m, "model_dump") else m
-                for m in request.input
-            ]
-
-        output_index = 0
+        self, request: ResponsesAgentRequest
+    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
+        messages = to_chat_completions_input([m.model_dump() for m in request.input])
         for event in self.graph.stream({"messages": messages}, stream_mode=["updates"]):
             if event[0] == "updates":
                 for node_data in event[1].values():
                     if isinstance(node_data, dict) and node_data.get("messages"):
-                        for msg in node_data["messages"]:
-                            content = msg.content if hasattr(msg, "content") else str(msg)
-                            # Build OutputItem with type="message" (requires id, content, role)
-                            item = OutputItem(
-                                type="message",
-                                id=f"msg_{output_index}",
-                                role="assistant",
-                                content=[
-                                    Content(
-                                        type="output_text",
-                                        text=content or "",
-                                    )
-                                ],
-                            )
-                            yield ResponseOutputItemDoneEvent(
-                                item=item,
-                                output_index=output_index,
-                                type="response.output_item.done",
-                            )
-                            output_index += 1
+                        yield from output_to_responses_items_stream(node_data["messages"])
 
 
 # ─── Export ────────────────────────────────────────────────────────────────────
 
 AGENT = MedAtlasAgent()
 mlflow.models.set_model(AGENT)
+

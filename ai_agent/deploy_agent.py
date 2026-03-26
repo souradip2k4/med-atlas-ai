@@ -23,9 +23,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Same pattern as test_agent.py: import AGENT and ResponsesRequest
+# Same pattern as test_agent.py: import AGENT and ResponsesAgentRequest
 from ai_agent.agent import AGENT, ALL_TOOLS, LLM_ENDPOINT
-from mlflow.types.responses import ResponsesRequest, ChatContext
+from mlflow.types.responses import ResponsesAgentRequest
+from mlflow.types.agent import ChatContext
 
 
 # ── Pydantic request/response models ──────────────────────────────────────────
@@ -116,7 +117,7 @@ def invoke(request: InvokeRequest):
     Invoke the MedAtlasAgent.
 
     Mirrors the test_agent.py pattern:
-      req = ResponsesRequest(input=[...], context=ChatContext(...))
+      req = ResponsesAgentRequest(input=[...], context=ChatContext(...))
       resp = AGENT.predict(req)
 
     Example:
@@ -125,8 +126,8 @@ def invoke(request: InvokeRequest):
       }
     """
     try:
-        # Build ResponsesRequest — same as test_agent.py
-        req = ResponsesRequest(
+        # Build ResponsesAgentRequest — same as test_agent.py
+        req = ResponsesAgentRequest(
             input=[m.model_dump() for m in request.messages],
             context=ChatContext(user_id=request.user_id or "api-user"),
         )
