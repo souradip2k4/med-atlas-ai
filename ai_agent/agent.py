@@ -211,7 +211,6 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     except Exception as exc:
         return f"[Medical Agent Error] {exc}"
 
-
 # ─── Tool list ────────────────────────────────────────────────────────────────
 
 ALL_TOOLS = [genie_chat_tool, vector_search_tool, medical_agent_tool]
@@ -251,15 +250,15 @@ IS_ANALYTIC = True if ANY of these keywords appear:
 
 ### Step 2 — Route accordingly:
 
-| Classification                  | Tools to Call (in order)                |
-|-------------------------------|----------------------------------------|
-| IS_QUANTITATIVE only          | genie_chat_tool                        |
-| IS_SEMANTIC only              | vector_search_tool                     |
-| IS_ANALYTIC only              | medical_agent_tool                     |
-| IS_QUANTITATIVE + IS_SEMANTIC | genie_chat_tool, then vector_search_tool |
-| IS_QUANTITATIVE + IS_ANALYTIC | genie_chat_tool, then medical_agent_tool |
+| Classification                | Tools to Call (in order)                  |
+|-------------------------------|-------------------------------------------|
+| IS_QUANTITATIVE only          | genie_chat_tool                           |
+| IS_SEMANTIC only              | vector_search_tool                        |
+| IS_ANALYTIC only              | medical_agent_tool                        |
+| IS_QUANTITATIVE + IS_SEMANTIC | genie_chat_tool, then vector_search_tool  |
+| IS_QUANTITATIVE + IS_ANALYTIC | genie_chat_tool, then medical_agent_tool  |
 | IS_SEMANTIC + IS_ANALYTIC     | vector_search_tool, then medical_agent_tool |
-| ALL THREE                     | genie_chat_tool → vector_search_tool → medical_agent_tool |
+| ALL THREE                     | genie_chat_tool → vector_search_tool medical_agent_tool |
 
 ### Step 3 — Multi-tool orchestration:
 
@@ -271,10 +270,12 @@ After receiving each tool result, decide:
 
 ### Step 4 — Response format:
 
-• Cite specific facility names and regions
-• Format tabular results as markdown tables
-• If no results found, say so clearly and suggest trying a different approach
-• Combine insights from multiple tools into a single coherent answer
+• You MUST ALWAYS provide a final, human-readable response in Markdown format after your tool calls are complete.
+• NEVER respond with raw JSON, raw tool outputs, or unformatted text as your final answer.
+• If you called multiple tools, synthesize their results together into a single cohesive summary.
+• Cite specific facility names and regions.
+• Format tabular results as markdown tables.
+• If no results are found, say so clearly and suggest trying a different approach.
 """
 
 

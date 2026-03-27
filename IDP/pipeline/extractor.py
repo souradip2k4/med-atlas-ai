@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_databricks import ChatDatabricks
+from databricks_langchain import ChatDatabricks
 
 from config.organization_extraction import (
     OrganizationExtractionOutput,
@@ -47,8 +47,31 @@ _JSON_SUFFIX = (
 )
 
 
-def _strip_markdown_json(text: str) -> str:
-    """Remove ```json ... ``` wrappers if the LLM added them."""
+def _strip_markdown_json(text: str | list) -> str:
+    """Remove ```json ... ``` wrappers if the LLM added them.
+
+    Also handles the case where newer versions of databricks_langchain
+    return ``response.content`` as a list of content-block dicts,
+    e.g. ``[{"type": "text", "text": "..."}]``.
+
+    Reasoning/thinking blocks (``{"type": "reasoning", ...}``) are
+    explicitly skipped — only ``{"type": "text", ...}`` blocks are
+    included so the chain-of-thought prefix does not corrupt the JSON.
+    """
+    # Normalise list-of-blocks to a plain string
+    if isinstance(text, list):
+        parts = []
+        for block in text:
+            if isinstance(block, dict):
+                block_type = block.get("type", "text")
+                # Skip reasoning / thinking blocks entirely
+                if block_type in ("reasoning", "thinking"):
+                    continue
+                parts.append(block.get("text") or block.get("content") or "")
+            else:
+                parts.append(str(block))
+        text = "".join(parts)
+
     text = text.strip()
     # Remove ```json or ``` fences
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -80,17 +103,37 @@ class LLMExtractor:
 
     # ── Internal call helpers ────────────────────────────────────────
 
-    def _call_llm(self, system_prompt: str, user_text: str) -> str:
-        """Invoke the LLM and return the raw response string."""
+    def _call_llm(self, system_prompt: str, user_text: str, max_retries: int = 2) -> str:
+        """Invoke the LLM and return the raw response string.
+
+        Retries up to ``max_retries`` times if the LLM returns an empty
+        response (e.g. a reasoning-model that emitted only a thinking block
+        with no text block on first attempt).
+        """
         messages = [
             SystemMessage(content=system_prompt + _JSON_SUFFIX),
             HumanMessage(content=user_text),
         ]
-        response = self.llm.invoke(messages)
-        return _strip_markdown_json(response.content)
+        for attempt in range(1, max_retries + 1):
+            response = self.llm.invoke(messages)
+            result = _strip_markdown_json(response.content)
+            if result:
+                return result
+            logger.warning(
+                "LLM returned empty response (attempt %d/%d) — retrying",
+                attempt, max_retries,
+            )
+        logger.error("LLM returned empty response after %d attempts", max_retries)
+        return ""
 
     def _parse(self, model_cls, raw_json: str):
         """Parse ``raw_json`` via ``model_cls.model_validate_json``."""
+        if not raw_json or not raw_json.strip():
+            logger.warning(
+                "Empty JSON string passed to parser for %s — skipping",
+                model_cls.__name__,
+            )
+            return None
         try:
             parsed = model_cls.model_validate_json(raw_json)
             return parsed
