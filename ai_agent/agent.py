@@ -14,13 +14,22 @@ Architecture:
   - ResponsesAgent pattern for MLflow deployment compatibility
 """
 
-# from __future__ import annotations
-
 import json
+import uuid
+import warnings
 import mlflow
 import os
 from pathlib import Path
-from typing import Annotated, Generator, Sequence, TypedDict
+from typing import Annotated, Any, Generator, Sequence, TypedDict
+
+from dotenv import load_dotenv
+_env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(_env_path)
+
+os.environ["DATABRICKS_DISABLE_NOTICE"] = "true"
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
+# Enable LangChain tracing so tool calls and LLM responses are captured in MLflow.
+mlflow.langchain.autolog()
 
 # LangGraph
 from langgraph.graph import END, StateGraph
@@ -32,27 +41,25 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import tool
 
-# MLflow ResponsesAgent
+# MLflow ResponsesAgent (MLflow 3.x)
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import (
     ResponsesAgentRequest,
     ResponsesAgentResponse,
     ResponsesAgentStreamEvent,
-    output_to_responses_items_stream,
+    ResponseOutputItemDoneEvent,
+    OutputItem,
     to_chat_completions_input,
+)
+from mlflow.types.responses_helpers import (
+    Content,
+    ResponseOutputText,
 )
 
 # Databricks integrations
 from databricks_langchain import ChatDatabricks
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
-
-from dotenv import load_dotenv
-_env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(_env_path)
-
-os.environ["DATABRICKS_DISABLE_NOTICE"] = "true"
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
 
 LLM_ENDPOINT  = os.environ["LLM_ENDPOINT"]
 VS_INDEX     = os.environ.get("VS_INDEX", "med_atlas_ai.default.facility_facts_index")
@@ -68,20 +75,35 @@ def genie_chat_tool(query: str) -> str:
     """
     Route quantitative, aggregation, and SQL-friendly questions to the Genie Space.
 
-    Best for: facility counts, region/district statistics, averages, rankings,
-    "how many", "total", "most", "top N", structured column filtering.
-    NOT for: semantic similarity, free-text capability searches.
+    Best for: facility counts, region/district/state statistics, averages, rankings,
+    "how many", "total", "most", "least", "top N", "number of", "how many hospitals in",
+    structured column filtering, comparisons, distributions, bed/staff ratios.
+
+    Trigger keywords: "how many", "count", "total", "average", "sum", "most",
+    "least", "top N", "region", "district", "state", "ownership", "beds",
+    "staff", "ratio", "percentage", "ranking", "compar", "distribution".
+
+    NOT for: semantic similarity, free-text capability searches, facility details.
     """
     from databricks_langchain import GenieAgent
 
-    agent = GenieAgent(GENIE_ID)
-    return agent.invoke({"messages": [{"role": "user", "content": query}]})
+    try:
+        agent = GenieAgent(GENIE_ID)
+        return agent.invoke({"messages": [{"role": "user", "content": query}]})
+    except AttributeError as exc:
+        # MLflow tracing can raise internal LiveSpan/trace_id AttributeErrors.
+        # Retry once — the second attempt succeeds without tracing interference.
+        if "trace_id" in str(exc) or "LiveSpan" in str(exc):
+            warnings.warn(f"Tracing internal error (non-fatal), retrying: {exc}")
+            agent = GenieAgent(GENIE_ID)
+            return agent.invoke({"messages": [{"role": "user", "content": query}]})
+        raise
 
 
 # ─── Tool 2 — Vector Search ───────────────────────────────────────────────────
 
 @tool
-def vector_search_tool(query: str, fact_types: list[str] | str | None = None)-> str:
+def vector_search_tool(query: str, fact_types: list[str] | str | None = None) -> str:
     """
     Semantic search over pre-generated facility facts.
 
@@ -96,30 +118,26 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None)-> 
                     If None, searches across all fact types.
     """
     from databricks_langchain import VectorSearchRetrieverTool
-    # Coerce str → list so LLM can pass either format without error
+
     if isinstance(fact_types, str):
         fact_types = [fact_types]
-        
+
     kwargs = {
         "index_name": VS_INDEX,
         "num_results": 15,
-         "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
+        "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
     }
-    
-    if fact_types:
-        kwargs["filters"] = {"fact_type": {"$in": fact_types}}
-        
-    # Standard endpoint filter syntax: flat equality dict (not $in)
-    # Use the first fact_type if provided; for multi-type, no filter is applied
+
     if fact_types and len(fact_types) == 1:
         kwargs["filters"] = {"fact_type": fact_types[0]}
-    # For multiple fact_types: no server-side filter (all types searched), then post-filter
+    elif fact_types and len(fact_types) > 1:
+        kwargs["filters"] = {"fact_type": {"$in": fact_types}}
+
     post_filter_types = set(fact_types) if fact_types and len(fact_types) > 1 else None
 
     try:
         vs = VectorSearchRetrieverTool(**kwargs)
         results = vs.invoke({"query": query})
-        # Post-filter if multiple fact_types were requested
         if post_filter_types and isinstance(results, list):
             results = [
                 doc for doc in results
@@ -137,18 +155,35 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     """
     Medical domain reasoning and anomaly detection on facility data.
 
-    Uses system.ai.python_exec (built-in UC function) to run a Python rule
-    engine on facility_records and facility_facts tables.
+    Uses the analyze_medical_query UC function on facility_records and
+    facility_facts tables to detect data quality issues and anomalies.
 
-    Detects 8 anomaly types:
-      1. equipment_procedure_mismatch  — MRI without radiology staff, etc.
-      2. over_claiming               — clinic claiming cardiac surgery
-      3. duplicate_facility          — same name in multiple records
-      4. contradictory_signals       — conflicting ICU level statements
-      5. ngo_classification          — direct_operator / supporter / none
-      6. reliability_score           — 0-100 data quality score
-      7. unmet_needs                 — service gaps by region
-      8. anomaly_flagging             — outlier bed/doctor counts
+    Detects 18 anomaly types:
+      1. contradictory_signals       — conflicting ICU/inpatient level statements
+      2. ngo_classification         — direct_operator / supporter / none
+      3. reliability_score           — 0-100 data quality score
+      4. over_claiming              — clinic claiming hospital-level services
+      5. equipment_procedure_mismatch — MRI/CT without radiology support
+      6. unmet_needs                — service gaps by region
+      7. duplicate_facility         — same name in multiple records
+      8. anomaly_flagging            — outlier bed/doctor counts
+      9. abnormal_ratio              — implausible bed/OR/doctor ratios
+     10. feature_mismatch           — procedure count vs equipment count mismatch
+     11. specialty_infrastructure_mismatch — subspecialty vs capacity mismatch
+     12. oversupply_scarcity        — procedure frequency vs facility count
+     13. ngo_overlap                — overlapping NGO presence in same region
+     14. problem_type               — classify gaps as equipment/training/workforce
+     15. specialist_distribution    — specialty → region mapping
+     16. web_capability_mismatch    — description reliability vs actual services
+     17. visiting_vs_permanent      — facility_type vs staffing patterns
+     18. data_staleness             — outdated records (updated_at age scoring)
+
+    Trigger keywords: "anomal", "inconsisten", "contradict", "reliab", "score",
+    "quality", "ngo", "classify", "over-claim", "mismatch", "gap", "unmet",
+    "outlier", "flag", "duplicate", "abnormal", "implausib", "red flag",
+    "problem type", "workforce", "specialist", "visiting staff", "permanent staff",
+    "oversupply", "scarcity", "correlation", "benchmark", "weak operation",
+    "strong claim", "feature mismatch", "ratio vs", "overlapping", "subspecialty".
 
     Args:
         query:      Analysis question (e.g., "detect anomalies", "score reliability")
@@ -158,22 +193,16 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     """
     from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
 
-    CAT = CATALOG
-    SCH = SCHEMA
-
-    # Call the SQL UC function (works on PRO warehouses, no PySpark needed).
-    # The UC function returns JSON where findings is a JSON-string-encoded array.
     args = {"query": query}
     if facility_id:
         args["facility_id"] = facility_id
 
     try:
         uc = UCFunctionToolkit(
-            function_names=[f"{CAT}.{SCH}.analyze_medical_query"]
+            function_names=[f"{CATALOG}.{SCHEMA}.analyze_medical_query"]
         )
         uc_fn = uc.tools[0]
         raw_result = uc_fn.invoke({"query_json": json.dumps(args)})
-        # The UC function returns a JSON string; parse it and decode findings
         outer = json.loads(raw_result)
         findings_raw = outer.get("findings", "[]")
         findings = json.loads(findings_raw)
@@ -192,23 +221,63 @@ ALL_TOOLS = [genie_chat_tool, vector_search_tool, medical_agent_tool]
 
 SYSTEM_PROMPT = """You are Med-Atlas-AI, a healthcare infrastructure analyst for Ghana.
 
-Use exactly ONE tool per query:
+## Tool Routing — Step-by-Step Decision
 
-• "how many", "count", "total", "average", "sum", "most", "least", "top N",
-  "region", "district", "ownership", "beds", "staff" → genie_chat_tool
+Before answering, determine the query type by checking which keywords are present.
+A query can match ONE or MORE types simultaneously.
 
-• "similar", "like", "capability", "service", "equipment", "provides",
-  "specialty", "has", "can provide", "offers" → vector_search_tool
+### Step 1 — Classify the query (check all three):
 
-• "anomal", "inconsisten", "contradict", "reliab", "score", "quality",
-  "ngo", "classify", "over-claim", "implausib", "mismatch", "gap",
-  "unmet need", "equipment", "outlier", "flag", "duplicate" → medical_agent_tool
+IS_QUANTITATIVE = True if ANY of these keywords appear:
+  "how many", "count", "total", "average", "sum", "most", "least",
+  "top N", "region", "district", "ownership", "beds", "staff",
+  "ratio", "percentage", "ranking", "compar", "distribution",
+  "how many hospitals in [region]", "number of", "how many facilities"
 
-For multi-part questions, call multiple tools. Cite facility names and regions.
-Format tabular results as markdown. If a tool returns no results, say so clearly.
+IS_SEMANTIC = True if ANY of these keywords appear:
+  "similar", "like", "service", "equipment", "provides", "specialty",
+  "has", "can provide", "offers", "what does", "which facilities provide",
+  "capability", "capabilities", "similar to", "what services", "procedures"
+
+IS_ANALYTIC = True if ANY of these keywords appear:
+  "anomal", "inconsisten", "contradict", "reliab", "score", "quality",
+  "ngo", "classify", "classif", "over-claim", "mismatch", "gap",
+  "unmet", "outlier", "flag", "duplicate", "abnormal", "implausib",
+  "red flag", "problem type", "workforce", "specialist", "specialist workforce",
+  "visiting staff", "permanent staff", "oversupply", "scarcity",
+  "correlation", "correlat", "benchmark", "weak operation", "strong claim",
+  "contradict", "inconsisten", "feature mismatch", "ratio vs",
+  "overlapping", "equipment mismatch", "subspecialty"
+
+### Step 2 — Route accordingly:
+
+| Classification                  | Tools to Call (in order)                |
+|-------------------------------|----------------------------------------|
+| IS_QUANTITATIVE only          | genie_chat_tool                        |
+| IS_SEMANTIC only              | vector_search_tool                     |
+| IS_ANALYTIC only              | medical_agent_tool                     |
+| IS_QUANTITATIVE + IS_SEMANTIC | genie_chat_tool, then vector_search_tool |
+| IS_QUANTITATIVE + IS_ANALYTIC | genie_chat_tool, then medical_agent_tool |
+| IS_SEMANTIC + IS_ANALYTIC     | vector_search_tool, then medical_agent_tool |
+| ALL THREE                     | genie_chat_tool → vector_search_tool → medical_agent_tool |
+
+### Step 3 — Multi-tool orchestration:
+
+After receiving each tool result, decide:
+  • If more data is needed from another tool → call the next tool in sequence
+  • If all necessary data is collected → synthesize a comprehensive markdown answer
+  • If a tool returns an error or empty results → try the next appropriate tool as fallback
+  • Never repeat the same tool twice for the same purpose
+
+### Step 4 — Response format:
+
+• Cite specific facility names and regions
+• Format tabular results as markdown tables
+• If no results found, say so clearly and suggest trying a different approach
+• Combine insights from multiple tools into a single coherent answer
 """
 
-# Count health centres in each region AND find anomalies.
+
 # ─── LangGraph ────────────────────────────────────────────────────────────────
 
 class AgentState(TypedDict):
@@ -242,7 +311,110 @@ def build_graph():
     return graph.compile()
 
 
-# ─── ResponsesAgent (MLflow deployment interface) ──────────────────────────────
+# ─── Stream aggregator ─────────────────────────────────────────────────────────
+#
+# output_to_responses_items_stream() processes each message independently and
+# emits function_call / function_call_output as separate events. For a
+# readable tool-call sequence, we aggregate them and emit:
+#
+#   function_call → function_call_output → message
+#
+# in execution order. This lets API consumers see exactly which tools ran and
+# in what sequence before the final answer.
+
+class _ToolCallTracker:
+    """Collects tool calls and tool results from LangGraph message stream."""
+
+    def __init__(self):
+        # List of {call_id, name, arguments} seen so far
+        self.pending_calls: list[dict[str, Any]] = []
+        # call_id → result string
+        self.call_results: dict[str, str] = {}
+        # List of stream events to yield in order
+        self.events: list[ResponsesAgentStreamEvent] = []
+        self.output_index = 0
+
+    def _emit(self, item: OutputItem) -> None:
+        self.events.append(
+            ResponseOutputItemDoneEvent(
+                item=item,
+                output_index=self.output_index,
+                type="response.output_item.done",
+            )
+        )
+        self.output_index += 1
+
+    def process_message(self, msg: Any) -> None:
+        """
+        Process a single LangChain message and update the tracker.
+        Emits events immediately for tool_calls (function_call) and tool (function_call_output).
+        Accumulates text for the final message.
+        """
+        msg_type = getattr(msg, "type", None)
+        msg_id = getattr(msg, "id", None) or str(uuid.uuid4())
+
+        if msg_type == "ai":
+            content = getattr(msg, "content", None) or ""
+
+            # 1) Emit function_call items first
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            for tc in tool_calls:
+                call_id = tc.get("id") or str(uuid.uuid4())
+                tc_name = tc.get("name", "unknown")
+                tc_args = tc.get("args", {})
+                if isinstance(tc_args, str):
+                    try:
+                        tc_args = json.loads(tc_args)
+                    except Exception:
+                        pass
+
+                self.pending_calls.append({
+                    "call_id": call_id,
+                    "name": tc_name,
+                    "arguments": tc_args,
+                })
+
+                self._emit(OutputItem(
+                    type="function_call",
+                    id=msg_id,
+                    name=tc_name,
+                    call_id=call_id,
+                    arguments=json.dumps(tc_args, indent=2),
+                ))
+
+            # 2) Emit text content as message (may be empty if this is a tool-call-only turn)
+            if content.strip():
+                self._emit(OutputItem(
+                    type="message",
+                    id=msg_id,
+                    role="assistant",
+                    content=[Content(type="output_text", text=content)],
+                ))
+
+        elif msg_type == "tool":
+            # Tool result — store it and emit function_call_output immediately after
+            # the corresponding function_call. We emit it in the order it arrives.
+            call_id = getattr(msg, "tool_call_id", None) or "unknown"
+            tool_content = getattr(msg, "content", None) or ""
+            self.call_results[call_id] = tool_content
+
+            # Emit the function_call_output event
+            self._emit(OutputItem(
+                type="function_call_output",
+                call_id=call_id,
+                output=tool_content,
+            ))
+
+        elif msg_type in ("user", "human"):
+            # Skip user messages in output
+            pass
+
+    def finalize(self) -> list[ResponsesAgentStreamEvent]:
+        """Return all collected events in order."""
+        return self.events
+
+
+# ─── ResponsesAgent (MLflow 3.x deployment interface) ──────────────────────────
 
 class MedAtlasAgent(ResponsesAgent):
     def __init__(self):
@@ -259,16 +431,30 @@ class MedAtlasAgent(ResponsesAgent):
     def predict_stream(
         self, request: ResponsesAgentRequest
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
+        # Convert input to LangGraph message format
         messages = to_chat_completions_input([m.model_dump() for m in request.input])
-        for event in self.graph.stream({"messages": messages}, stream_mode=["updates"]):
-            if event[0] == "updates":
-                for node_data in event[1].values():
-                    if isinstance(node_data, dict) and node_data.get("messages"):
-                        yield from output_to_responses_items_stream(node_data["messages"])
+
+        tracker = _ToolCallTracker()
+
+        for event in self.graph.stream(
+            {"messages": messages},
+            config={"recursion_limit": 100},
+            stream_mode=["updates"],
+        ):
+            if event[0] != "updates":
+                continue
+
+            for node_data in event[1].values():
+                if not isinstance(node_data, dict) or not node_data.get("messages"):
+                    continue
+
+                for msg in node_data["messages"]:
+                    tracker.process_message(msg)
+
+        yield from tracker.finalize()
 
 
 # ─── Export ────────────────────────────────────────────────────────────────────
 
 AGENT = MedAtlasAgent()
 mlflow.models.set_model(AGENT)
-

@@ -53,17 +53,17 @@ if __name__ == "__main__":
 
     tests = [
         # Genie (quantitative)
-        # ("Genie-1", "How many hospitals are in the Ashanti Region?"),
-        # ("Genie-2", "What is the total number of beds across all facilities?"),
+        ("Genie-1", "How many hospitals are in the Ashanti Region?"),
+        ("Genie-2", "What is the total number of beds across all facilities?"),
         # ("Genie-3", "Show the top 5 districts by number of health facilities."),
 
         # Vector Search (semantic)
         ("VS-1", "Which facilities provide cardiac surgery?"),
         ("VS-2", "What equipment does the main regional hospital have?"),
-        ("VS-3", "Find facilities that have MRI machines."),
+        # ("VS-3", "Find facilities that have MRI machines."),
 
         # Medical Agent (anomaly detection)
-        # ("Med-1", "Detect anomalies in facility records — contradictory signals."),
+        ("Med-1", "Detect anomalies in facility records — contradictory signals."),
         # ("Med-2", "Score the reliability of all hospitals."),
         # ("Med-3", "Classify NGO involvement for all facilities."),
         # ("Med-4", "Find over-claiming in facility service claims."),
