@@ -5,7 +5,7 @@ Wraps the MedAtlasAgent for REST access. MLflow integration is preserved
 so agent traces are captured for evaluation.
 
 Run locally:
-  uv run uvicorn ai_agent.deploy_agent:app --reload --port 8000
+  uv run uvicorn ai_agent.server:app --reload --port 8000
 
 Endpoints:
   POST /invoke   — call the agent (same as AGENT.predict in test_agent.py)
@@ -18,12 +18,12 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from typing import Any
+import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Same pattern as test_agent.py: import AGENT and ResponsesAgentRequest
 from ai_agent.agent import AGENT, ALL_TOOLS, LLM_ENDPOINT
 from mlflow.types.responses import ResponsesAgentRequest
 from mlflow.types.agent import ChatContext
@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
     print("MedAtlasAgent FastAPI server shutting down.")
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────────────
+# ── FastAPI app ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Med-Atlas-AI API",
@@ -111,14 +111,81 @@ def list_tools():
     }
 
 
+def _format_output_item(out: Any) -> dict[str, Any]:
+    """
+    Format a single output item from the agent into a clean dict.
+
+    Handles three types:
+      - message       → {type, content}
+      - function_call → {type, tool_name, arguments}
+      - function_call_output → {type, tool_name, output}
+    """
+    item: dict[str, Any] = {"type": getattr(out, "type", "unknown")}
+
+    # ── message ──────────────────────────────────────────────────────────────
+    if item["type"] == "message":
+        content_list = getattr(out, "content", None)
+        if content_list:
+            texts = []
+            for c in content_list:
+                if isinstance(c, dict):
+                    texts.append(c.get("text", ""))
+                else:
+                    texts.append(getattr(c, "text", str(c)) if hasattr(c, "text") else str(c))
+            item["content"] = "\n".join(texts)
+        else:
+            item["content"] = getattr(out, "text", "")
+        item["role"] = getattr(out, "role", "assistant")
+        return item
+
+    # ── function_call ─────────────────────────────────────────────────────────
+    if item["type"] == "function_call":
+        item["tool_name"] = getattr(out, "name", "unknown")
+        item["call_id"] = getattr(out, "call_id", "")
+        args = getattr(out, "arguments", "")
+        # Pretty-print JSON arguments if they look like JSON
+        if isinstance(args, str):
+            try:
+                parsed = json.loads(args)
+                item["arguments"] = json.dumps(parsed, indent=2)
+            except Exception:
+                item["arguments"] = args
+        else:
+            item["arguments"] = str(args)
+        return item
+
+    # ── function_call_output ──────────────────────────────────────────────────
+    if item["type"] == "function_call_output":
+        item["call_id"] = getattr(out, "call_id", "")
+        item["tool_name"] = ""  # Resolved below via call_id
+        raw_output = getattr(out, "output", "")
+        if isinstance(raw_output, str):
+            # Try to parse as JSON for clean display
+            try:
+                parsed = json.loads(raw_output)
+                item["output"] = json.dumps(parsed, indent=2)
+                item["output_format"] = "json"
+            except Exception:
+                item["output"] = raw_output
+                item["output_format"] = "text"
+        else:
+            item["output"] = str(raw_output)
+            item["output_format"] = "text"
+        return item
+
+    # ── fallback ─────────────────────────────────────────────────────────────
+    return item
+
+
 @app.post("/invoke", response_model=InvokeResponse)
 def invoke(request: InvokeRequest):
     """
     Invoke the MedAtlasAgent.
 
-    Mirrors the test_agent.py pattern:
-      req = ResponsesAgentRequest(input=[...], context=ChatContext(...))
-      resp = AGENT.predict(req)
+    Output structure:
+      - function_call        → which tool was called and with what arguments
+      - function_call_output → what the tool returned
+      - message             → the final LLM response
 
     Example:
       {
@@ -126,32 +193,14 @@ def invoke(request: InvokeRequest):
       }
     """
     try:
-        # Build ResponsesAgentRequest — same as test_agent.py
         req = ResponsesAgentRequest(
             input=[m.model_dump() for m in request.messages],
             context=ChatContext(user_id=request.user_id or "api-user"),
         )
 
-        # Call agent — same as test_agent.py
         resp = AGENT.predict(req)
 
-        # Extract output items from ResponsesResponse.output
-        output_items = []
-        for out in resp.output:
-            item = {"type": getattr(out, "type", "unknown")}
-            # Extract content from the nested content list if present
-            if hasattr(out, "content") and out.content:
-                texts = []
-                for c in out.content:
-                    if hasattr(c, "text"):
-                        texts.append(c.text)
-                    elif isinstance(c, dict) and "text" in c:
-                        texts.append(c["text"])
-                if texts:
-                    item["content"] = "\n".join(texts)
-            elif hasattr(out, "content") and not out.content:
-                item["content"] = ""
-            output_items.append(item)
+        output_items = [_format_output_item(out) for out in resp.output]
 
         return InvokeResponse(output=output_items)
 
@@ -163,6 +212,7 @@ def invoke(request: InvokeRequest):
 
 if __name__ == "__main__":
     import uvicorn
+    import json as _json
 
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
