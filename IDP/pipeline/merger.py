@@ -15,7 +15,17 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from pipeline.geocoder import FacilityGeocoder
+
 logger = logging.getLogger(__name__)
+
+# Module-level singleton — one geolocator shared across all rows
+# (avoids re-creating the HTTP session for each row)
+try:
+    _geocoder = FacilityGeocoder()
+except ValueError as _geo_err:
+    logger.warning("Geocoder disabled: %s", _geo_err)
+    _geocoder = None
 
 
 def _merge_arrays(*arrays: Optional[List[str]]) -> List[str]:
@@ -43,10 +53,11 @@ def _first_non_null(*values: Any) -> Any:
 
 # ── Ghana city → region lookup (deterministic fallback when LLM cannot infer) ──
 _GHANA_CITY_REGION: dict[str, str] = {
-    # Greater Accra Region
+    # ── Greater Accra Region ──────────────────────────────────────────────
     "accra": "Greater Accra Region",
     "tema": "Greater Accra Region",
     "dansoman": "Greater Accra Region",
+    "central dansoman": "Greater Accra Region",
     "madina": "Greater Accra Region",
     "nungua": "Greater Accra Region",
     "teshie": "Greater Accra Region",
@@ -54,15 +65,82 @@ _GHANA_CITY_REGION: dict[str, str] = {
     "dome": "Greater Accra Region",
     "achimota": "Greater Accra Region",
     "kasoa": "Greater Accra Region",
-    # Ashanti Region
+    "accra newtown": "Greater Accra Region",
+    "adenta": "Greater Accra Region",
+    "adenta housing": "Greater Accra Region",
+    "airport residential": "Greater Accra Region",
+    "labone": "Greater Accra Region",
+    "cantonments": "Greater Accra Region",
+    "east legon": "Greater Accra Region",
+    "north legon": "Greater Accra Region",
+    "legon": "Greater Accra Region",
+    "haatso": "Greater Accra Region",
+    "spintex": "Greater Accra Region",
+    "north kaneshie": "Greater Accra Region",
+    "kaneshie": "Greater Accra Region",
+    "dzorwulu": "Greater Accra Region",
+    "asylum down": "Greater Accra Region",
+    "osu": "Greater Accra Region",
+    "labadi": "Greater Accra Region",
+    "la": "Greater Accra Region",
+    "kanda": "Greater Accra Region",
+    "okponglo": "Greater Accra Region",
+    "korle bu": "Greater Accra Region",
+    "jamestown": "Greater Accra Region",
+    "agbogbloshie": "Greater Accra Region",
+    "abossey okai": "Greater Accra Region",
+    "kokomlemle": "Greater Accra Region",
+    "ring road": "Greater Accra Region",
+    "aviation": "Greater Accra Region",
+    "community 25": "Greater Accra Region",
+    "community 1": "Greater Accra Region",
+    "community 22": "Greater Accra Region",
+    "ada foah": "Greater Accra Region",
+    "prampram": "Greater Accra Region",
+    "weija": "Greater Accra Region",
+    "amasaman": "Greater Accra Region",
+    "pokuase": "Greater Accra Region",
+    "ashiaman": "Greater Accra Region",
+    "odokor": "Greater Accra Region",
+    "darkuman": "Greater Accra Region",
+    "bubiashie": "Greater Accra Region",
+    # ── Ashanti Region ────────────────────────────────────────────────────
     "kumasi": "Ashanti Region",
     "obuasi": "Ashanti Region",
     "bekwai": "Ashanti Region",
     "asante mampong": "Ashanti Region",
     "ejisu": "Ashanti Region",
     "konongo": "Ashanti Region",
-    "abuakwa": "Ashanti Region",  # suburb of Kumasi
-    # Western Region
+    "abuakwa": "Ashanti Region",
+    "atonsu": "Ashanti Region",
+    "atonsu kumasi": "Ashanti Region",
+    "ahodwo": "Ashanti Region",
+    "asokore": "Ashanti Region",
+    "asokore mampong": "Ashanti Region",
+    "asokwa": "Ashanti Region",
+    "suame": "Ashanti Region",
+    "nhyiaeso": "Ashanti Region",
+    "bantama": "Ashanti Region",
+    "dichemso": "Ashanti Region",
+    "kwadaso": "Ashanti Region",
+    "tafo": "Ashanti Region",
+    "tanoso": "Ashanti Region",
+    "manhyia": "Ashanti Region",
+    "danyame": "Ashanti Region",
+    "ayigya": "Ashanti Region",
+    "ampa": "Ashanti Region",
+    "ksi": "Ashanti Region",
+    "mampong": "Ashanti Region",
+    "agogo": "Ashanti Region",
+    "juaben": "Ashanti Region",
+    "ashanti new town": "Ashanti Region",
+    "bosomtwe": "Ashanti Region",
+    "nkawie": "Ashanti Region",
+    "tepa": "Ashanti Region",
+    "manso nkwanta": "Ashanti Region",
+    "ofinso": "Ashanti Region",
+    "drobonso": "Ashanti Region",
+    # ── Western Region ────────────────────────────────────────────────────
     "takoradi": "Western Region",
     "sekondi": "Western Region",
     "tarkwa": "Western Region",
@@ -71,14 +149,29 @@ _GHANA_CITY_REGION: dict[str, str] = {
     "apremdo": "Western Region",
     "axim": "Western Region",
     "half assini": "Western Region",
-    # Central Region
+    "shama": "Western Region",
+    "effia": "Western Region",
+    "nsuta": "Western Region",
+    "aboso": "Western Region",
+    "agona": "Western Region",
+    "nkroful": "Western Region",
+    "ellembele": "Western Region",
+    "abura": "Western Region",
+    # ── Central Region ────────────────────────────────────────────────────
     "cape coast": "Central Region",
     "elmina": "Central Region",
     "winneba": "Central Region",
     "agona swedru": "Central Region",
     "mankessim": "Central Region",
     "saltpond": "Central Region",
-    # Eastern Region
+    "assin fosu": "Central Region",
+    "breman asikuma": "Central Region",
+    "mfantsiman": "Central Region",
+    "eguafo abrem": "Central Region",
+    "ajumako": "Central Region",
+    "gomoa": "Central Region",
+    "twifo praso": "Central Region",
+    # ── Eastern Region ────────────────────────────────────────────────────
     "koforidua": "Eastern Region",
     "nkawkaw": "Eastern Region",
     "abomosu": "Eastern Region",
@@ -86,52 +179,129 @@ _GHANA_CITY_REGION: dict[str, str] = {
     "suhum": "Eastern Region",
     "nsawam": "Eastern Region",
     "akim oda": "Eastern Region",
-    # Northern Region
-    "tamale": "Northern Region",
-    "yendi": "Northern Region",
-    "walewale": "Northern Region",
-    # Upper East Region
-    "bolgatanga": "Upper East Region",
-    "navrongo": "Upper East Region",
-    "bawku": "Upper East Region",
-    # Upper West Region
-    "wa": "Upper West Region",
-    "lawra": "Upper West Region",
-    # Volta Region
+    "akosombo": "Eastern Region",
+    "atimpoku": "Eastern Region",
+    "somanya": "Eastern Region",
+    "abetifi": "Eastern Region",
+    "mpraeso": "Eastern Region",
+    "nkurakan": "Eastern Region",
+    "anum": "Eastern Region",
+    "asamankese": "Eastern Region",
+    "mangoase": "Eastern Region",
+    "osino": "Eastern Region",
+    "kukurantumi": "Eastern Region",
+    "tafo koforidua": "Eastern Region",
+    # ── Volta Region ──────────────────────────────────────────────────────
     "ho": "Volta Region",
     "hohoe": "Volta Region",
     "keta": "Volta Region",
     "anloga": "Volta Region",
-    # Bono Region
+    "akatsi": "Volta Region",
+    "adidome": "Volta Region",
+    "sogakofe": "Volta Region",
+    "battor": "Volta Region",
+    "anfoega": "Volta Region",
+    "kpando": "Volta Region",
+    "aflao": "Volta Region",
+    "denu": "Volta Region",
+    "abor": "Volta Region",
+    "tsito": "Volta Region",
+    "vane": "Volta Region",
+    "peki": "Volta Region",
+    "jasikan": "Volta Region",
+    "kpeve": "Volta Region",
+    "nkwanta": "Volta Region",
+    # ── Northern Region ───────────────────────────────────────────────────
+    "tamale": "Northern Region",
+    "yendi": "Northern Region",
+    "walewale": "Northern Region",
+    "savelugu": "Northern Region",
+    "gushegu": "Northern Region",
+    "karaga": "Northern Region",
+    "tolon": "Northern Region",
+    "kumbungu": "Northern Region",
+    "bimbilla": "Northern Region",
+    # ── Upper East Region ─────────────────────────────────────────────────
+    "bolgatanga": "Upper East Region",
+    "navrongo": "Upper East Region",
+    "bawku": "Upper East Region",
+    "zebilla": "Upper East Region",
+    "sandema": "Upper East Region",
+    "paga": "Upper East Region",
+    "chiana": "Upper East Region",
+    # ── Upper West Region ─────────────────────────────────────────────────
+    "wa": "Upper West Region",
+    "lawra": "Upper West Region",
+    "jirapa": "Upper West Region",
+    "nandom": "Upper West Region",
+    "tumu": "Upper West Region",
+    "kaleo": "Upper West Region",
+    # ── Bono Region ───────────────────────────────────────────────────────
     "sunyani": "Bono Region",
     "berekum": "Bono Region",
-    # Bono East Region
+    "dormaa ahenkro": "Bono Region",
+    "wenchi": "Bono Region",
+    "drobo": "Bono Region",
+    "sampa": "Bono Region",
+    # ── Bono East Region ──────────────────────────────────────────────────
     "techiman": "Bono East Region",
     "acherensua": "Bono East Region",
     "atebubu": "Bono East Region",
     "kintampo": "Bono East Region",
-    # Ahafo Region
+    "nkoranza": "Bono East Region",
+    "yeji": "Bono East Region",
+    # ── Ahafo Region ──────────────────────────────────────────────────────
     "goaso": "Ahafo Region",
     "kukuom": "Ahafo Region",
-    # Savannah Region
+    "hwidiem": "Ahafo Region",
+    "kenyasi": "Ahafo Region",
+    # ── Savannah Region ───────────────────────────────────────────────────
     "damongo": "Savannah Region",
     "bole": "Savannah Region",
-    # North East Region
+    "sawla": "Savannah Region",
+    "buipe": "Savannah Region",
+    # ── North East Region ─────────────────────────────────────────────────
     "nalerigu": "North East Region",
     "gambaga": "North East Region",
-    # Oti Region
+    "chereponi": "North East Region",
+    # ── Oti Region ────────────────────────────────────────────────────────
     "dambai": "Oti Region",
-    # Western North Region
+    "krachi": "Oti Region",
+    "nkwanta south": "Oti Region",
+    # ── Western North Region ──────────────────────────────────────────────
     "sefwi wiawso": "Western North Region",
     "bibiani": "Western North Region",
+    "enchi": "Western North Region",
+    "juaboso": "Western North Region",
+    "sefwi akontombra": "Western North Region",
 }
 
 
 def _infer_ghana_region(city: Optional[str]) -> Optional[str]:
-    """Lookup the Ghanaian region for a given city name (case-insensitive)."""
+    """Lookup the Ghanaian region for a given city name (case-insensitive).
+
+    Resolution order (stops at first match):
+    1. Exact match on the full city string.
+    2. Partial match — checks whether any known key appears as a
+       substring of the city string, ordered by key length descending
+       so longer (more specific) keys win over shorter ones.
+       e.g. "Atonsu Kumasi" → "Ashanti Region" via key "kumasi".
+    """
     if not city:
         return None
-    return _GHANA_CITY_REGION.get(city.strip().lower())
+    city_lower = city.strip().lower()
+
+    # 1. Exact match (fast, no change to existing behaviour)
+    if city_lower in _GHANA_CITY_REGION:
+        return _GHANA_CITY_REGION[city_lower]
+
+    # 2. Partial/substring match — longer keys checked first to avoid
+    #    short keys (e.g. "wa", "ho", "la") matching unintended strings.
+    for key in sorted(_GHANA_CITY_REGION, key=len, reverse=True):
+        if len(key) >= 4 and key in city_lower:   # min 4 chars to avoid false positives
+            return _GHANA_CITY_REGION[key]
+
+    return None
 
 
 def merge_extraction_results(
@@ -161,8 +331,6 @@ def merge_extraction_results(
 
     facility_name = extraction.get("facility_name") or row.get("name") or "Unknown"
     source_row_id = extraction.get("source_row_id", "")
-    synth_text = extraction.get("synthesized_text", "")
-
     now = datetime.now(timezone.utc)
 
     # ── Determine organization_type ──
@@ -213,6 +381,24 @@ def merge_extraction_results(
     country_code = _first_non_null(
         fac.address_countryCode if fac else None, row.get("address_countrycode")
     )
+
+    # ── Geocoding (lat/lon) ──
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    if _geocoder is not None:
+        geo = _geocoder.geocode_facility(
+            name=facility_name,
+            city=city,
+            state=state,
+            country=country or "Ghana",
+        )
+        latitude = geo["latitude"]
+        longitude = geo["longitude"]
+        # Backfill city/state when the API resolved them and we had no value
+        if geo["resolved_city"] and not city:
+            city = geo["resolved_city"]
+        if geo["resolved_state"] and not state:
+            state = geo["resolved_state"]
 
     # ── Contact ──
     phone_numbers = _merge_arrays(
@@ -289,6 +475,8 @@ def merge_extraction_results(
         "state": state,
         "country": country,
         "country_code": country_code,
+        "latitude": latitude,
+        "longitude": longitude,
         "phone_numbers": phone_numbers or None,
         "email": email,
         "websites": websites or None,

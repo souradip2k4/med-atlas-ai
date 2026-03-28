@@ -17,6 +17,7 @@ from pyspark.sql.types import (
     BooleanType,
     ArrayType,
     TimestampType,
+    DoubleType,
 )
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,10 @@ FACILITY_RECORDS_SCHEMA = StructType([
     StructField("state", StringType(), nullable=True),
     StructField("country", StringType(), nullable=True),
     StructField("country_code", StringType(), nullable=True),
+
+    # ── Geospatial ──
+    StructField("latitude", DoubleType(), nullable=True),
+    StructField("longitude", DoubleType(), nullable=True),
 
     # ── Contact ──
     StructField("phone_numbers", ArrayType(StringType()), nullable=True),

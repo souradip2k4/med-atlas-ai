@@ -259,6 +259,7 @@ THEN (
       MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'trauma|orthopaedic surgery' THEN 1 ELSE 0 END) AS has_trauma
     FROM med_atlas_ai.default.regional_insights ri
     WHERE ri.state IS NOT NULL
+      AND ri.insight_category IN ('specialty', 'procedure', 'capability')
     GROUP BY ri.state
   ),
   gaps AS (
@@ -755,16 +756,14 @@ WHEN LOWER(parse_json(query_json):query) RLIKE 'specialist|specialist distributi
 THEN (
   WITH specialist_regions AS (
     SELECT
-      fr.state AS region,
-      LOWER(ff.fact_text) AS specialty,
-      COUNT(DISTINCT fr.facility_id) AS n_facilities,
-      COLLECT_LIST(fr.facility_name) AS facilities
-    FROM med_atlas_ai.default.facility_records fr
-    JOIN med_atlas_ai.default.facility_facts ff ON fr.facility_id = ff.facility_id
-    WHERE fr.organization_type = 'facility'
-      AND fr.state IS NOT NULL
-      AND ff.fact_type = 'specialty'
-      AND LOWER(ff.fact_text) RLIKE
+      ri.state AS region,
+      LOWER(ri.insight_value) AS specialty,
+      ri.facility_count AS n_facilities,
+      ri.contributing_facility_ids AS facilities
+    FROM med_atlas_ai.default.regional_insights ri
+    WHERE ri.insight_category = 'specialty'
+      AND ri.state IS NOT NULL
+      AND LOWER(ri.insight_value) RLIKE
         'cardiology|cardiac surgery|'
         || 'cardiacsurgery|'
         || 'neurology|neurosurgery|neuro|'
@@ -792,7 +791,6 @@ THEN (
         || 'hospice|palliative|'
         || 'medical oncology|'
         || 'orthodontics|orthodontic'
-    GROUP BY fr.state, LOWER(ff.fact_text)
   )
   SELECT to_json(
     map_from_arrays(
