@@ -145,105 +145,11 @@ THEN (
   WHERE reliability_score < 75
 )
 
--- 4. Over-claiming (clinic/dentist claiming hospital-level services)
-WHEN LOWER(parse_json(query_json):query) RLIKE 'over-claim|implausib|service claim'
-THEN (
-  SELECT to_json(
-    map_from_arrays(
-      array('query', 'findings'),
-      array(
-        parse_json(query_json):query,
-        to_json(array_agg(named_struct(
-          'type', 'over_claiming',
-          'facility_id', facility_id,
-          'facility_name', facility_name,
-          'facility_type', ftype,
-          'implausible_service', svc_text,
-          'severity', 'high',
-          'reason', 'A ' || ftype || ' should not provide emergency/ICU/inpatient services'
-        )))
-      )
-    )
-  )
-  FROM (
-    SELECT DISTINCT
-      fr.facility_id,
-      fr.facility_name,
-      COALESCE(fr.facility_type, 'unknown') AS ftype,
-      LOWER(ff.fact_text) AS svc_text
-    FROM med_atlas_ai.default.facility_records fr
-    JOIN med_atlas_ai.default.facility_facts ff ON fr.facility_id = ff.facility_id
-    WHERE fr.organization_type = 'facility'
-      AND LOWER(COALESCE(fr.facility_type, '')) IN ('clinic', 'dentist', 'pharmacy')
-      AND (
-        LOWER(ff.fact_text) RLIKE 'emergency room|emergency department|icu|intensive care|open heart|organ transplant|brain surgery'
-        OR LOWER(ff.fact_text) RLIKE 'inpatient|24-hour emergency'
-      )
-  )
-)
 
--- 5. Equipment–Procedure Mismatch
-WHEN LOWER(parse_json(query_json):query) RLIKE 'equipment|mismatch'
-THEN (
-  WITH equip AS (
-    SELECT
-      e.facility_id,
-      fr.facility_name,
-      LOWER(e.fact_text) AS equip_lower,
-      e.fact_text AS equipment_fact
-    FROM med_atlas_ai.default.facility_facts e
-    JOIN med_atlas_ai.default.facility_records fr ON e.facility_id = fr.facility_id
-    WHERE e.fact_type = 'equipment'
-  ),
-  caps AS (
-    SELECT
-      facility_id,
-      LOWER(ARRAY_JOIN(collect_list(fact_text), ' ')) AS cap_text
-    FROM med_atlas_ai.default.facility_facts
-    WHERE fact_type IN ('capability', 'procedure')
-    GROUP BY facility_id
-  )
-  SELECT to_json(
-    map_from_arrays(
-      array('query', 'findings'),
-      array(
-        parse_json(query_json):query,
-        to_json(array_agg(named_struct(
-          'type', 'equipment_procedure_mismatch',
-          'facility_id', eq.facility_id,
-          'facility_name', eq.facility_name,
-          'equipment', eq.equipment_fact,
-          'issue',
-            CASE
-              WHEN eq.equip_lower RLIKE 'mri|magnetic resonance'
-                AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'radiology|radiographer|mri')
-                THEN 'MRI without radiology/radiographer support'
-              WHEN eq.equip_lower RLIKE 'ct scan|computed tomography'
-                AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'radiology|radiographer|ct')
-                THEN 'CT scan without radiology/radiographer support'
-              WHEN eq.equip_lower RLIKE 'dialysis|kidney'
-                AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'nephrology|dialysis|kidney')
-                THEN 'Dialysis without nephrology/kidney specialist'
-              WHEN eq.equip_lower RLIKE 'cardiac|cardiology'
-                AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'icu|cardiac surgery|cardiac care')
-                THEN 'Cardiac equipment without ICU/cardiac surgery support'
-              ELSE NULL
-            END,
-          'severity', 'high'
-        )))
-      )
-    )
-  )
-  FROM equip eq
-  LEFT JOIN caps cp ON eq.facility_id = cp.facility_id
-  WHERE eq.equip_lower RLIKE 'mri|ct scan|dialysis|dialysis center|cardiac'
-    AND (
-      (eq.equip_lower RLIKE 'mri' AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'radiology|radiographer|mri'))
-      OR (eq.equip_lower RLIKE 'ct scan' AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'radiology|radiographer|ct'))
-      OR (eq.equip_lower RLIKE 'dialysis|dialysis center' AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'nephrology|dialysis|kidney'))
-      OR (eq.equip_lower RLIKE 'cardiac' AND (cp.cap_text IS NULL OR NOT cp.cap_text RLIKE 'icu|cardiac'))
-    )
-)
+-- 4. Equipment counts vs Procedure counts (Feature Mismatch — moved up, purely numeric)
+-- NOTE: Branch 5 (Equipment-Procedure Mismatch via regex) has been removed.
+-- Medical domain reasoning about equipment-capability plausibility is now handled
+-- by the LLM agent directly using genie_chat_tool + vector_search_tool.
 
 -- 6. Unmet Needs / Regional Gaps
 WHEN LOWER(parse_json(query_json):query) RLIKE 'unmet|gap|need|service gap'
@@ -510,62 +416,10 @@ THEN (
   WHERE p.n_procedures > 3 AND COALESCE(e.n_equipment, 0) = 0
 )
 
--- 11. Subspecialty vs Infrastructure Mismatch
-WHEN LOWER(parse_json(query_json):query) RLIKE 'subspecialty|infrastructure mismatch|specialty vs infra|specialty mismatch'
-THEN (
-  WITH specialty_caps AS (
-    SELECT
-      fr.facility_id,
-      fr.facility_name,
-      COALESCE(fr.facility_type, 'unknown') AS facility_type,
-      COALESCE(CAST(fr.capacity AS INT), 0) AS capacity,
-      MAX(CASE WHEN LOWER(ff.fact_text) RLIKE 'neurosurgery|neuro|spine|interventional neurology'
-               THEN 1 ELSE 0 END) AS has_neuro,
-      MAX(CASE WHEN LOWER(ff.fact_text) RLIKE 'cardiac surgery|heart surgery|open heart|cardiothoracic'
-               THEN 1 ELSE 0 END) AS has_cardiac_surg,
-      MAX(CASE WHEN LOWER(ff.fact_text) RLIKE 'oncology|cancer'
-               THEN 1 ELSE 0 END) AS has_oncology,
-      MAX(CASE WHEN LOWER(ff.fact_text) RLIKE 'transplant|organ transplant'
-               THEN 1 ELSE 0 END) AS has_transplant
-    FROM med_atlas_ai.default.facility_records fr
-    LEFT JOIN med_atlas_ai.default.facility_facts ff ON fr.facility_id = ff.facility_id
-    WHERE fr.organization_type = 'facility'
-      AND ff.fact_type IN ('specialty', 'capability')
-    GROUP BY fr.facility_id, fr.facility_name, fr.facility_type, fr.capacity
-  )
-  SELECT to_json(
-    map_from_arrays(
-      array('query', 'findings'),
-      array(
-        parse_json(query_json):query,
-        to_json(array_agg(named_struct(
-          'type', 'specialty_infrastructure_mismatch',
-          'facility_id', facility_id,
-          'facility_name', facility_name,
-          'facility_type', facility_type,
-          'capacity', capacity,
-          'has_neurosurgery', has_neuro,
-          'has_cardiac_surgery', has_cardiac_surg,
-          'has_oncology', has_oncology,
-          'has_transplant', has_transplant,
-          'issue',
-            CASE
-              WHEN (has_neuro = 1 OR has_cardiac_surg = 1 OR has_oncology = 1 OR has_transplant = 1)
-                   AND (facility_type = 'clinic' OR (capacity < 100 AND capacity > 0))
-                THEN 'Advanced subspecialty claimed at low-capacity or clinic-level facility'
-              WHEN (has_neuro = 1 OR has_cardiac_surg = 1 OR has_oncology = 1 OR has_transplant = 1)
-                   AND capacity = 0
-                THEN 'Subspecialty service claimed but no bed capacity recorded'
-              ELSE NULL
-            END,
-          'severity', 'high'
-        )))
-      )
-    )
-  )
-  FROM specialty_caps
-  WHERE has_neuro = 1 OR has_cardiac_surg = 1 OR has_oncology = 1 OR has_transplant = 1
-)
+-- 11. Subspecialty vs Infrastructure Mismatch — REMOVED
+-- This branch has been replaced by LLM-native medical reasoning.
+-- The agent now fetches facility profiles via genie_chat_tool and uses its own
+-- medical domain knowledge to detect subspecialty-infrastructure mismatches.
 
 -- 12. Oversupply vs Scarcity (procedure frequency vs facility count)
 WHEN LOWER(parse_json(query_json):query) RLIKE 'oversupply|scarcity|procedure frequency|supply demand|how many facilities'

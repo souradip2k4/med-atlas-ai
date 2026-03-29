@@ -4,9 +4,10 @@ Med-Atlas-AI LangGraph Agent
 A healthcare infrastructure Q&A agent for Ghanaian medical facilities.
 
 Tools:
-  1. genie_chat_tool    — Natural language → SQL via Genie Space
-  2. vector_search_tool — Semantic search on facility_facts (VS with fact_type filter)
-  3. medical_agent_tool  — Anomaly detection via system.ai.python_exec UC function
+  1. genie_chat_tool         — Natural language → SQL via Genie Space
+  2. vector_search_tool      — Semantic search on facility_facts (VS with fact_type filter)
+  3. medical_agent_tool      — Statistical anomaly detection via analyze_medical_query UC function
+  4. geospatial_query_tool   — Distance-based facility search via find_facilities_nearby UC function
 
 Architecture:
   - Single LangGraph graph: [agent] → [tools] → [agent]
@@ -158,32 +159,32 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     Uses the analyze_medical_query UC function on facility_records and
     facility_facts tables to detect data quality issues and anomalies.
 
-    Detects 18 anomaly types:
-      1. contradictory_signals       — conflicting ICU/inpatient level statements
-      2. ngo_classification         — direct_operator / supporter / none
-      3. reliability_score           — 0-100 data quality score
-      4. over_claiming              — clinic claiming hospital-level services
-      5. equipment_procedure_mismatch — MRI/CT without radiology support
-      6. unmet_needs                — service gaps by region
-      7. duplicate_facility         — same name in multiple records
-      8. anomaly_flagging            — outlier bed/doctor counts
-      9. abnormal_ratio              — implausible bed/OR/doctor ratios
-     10. feature_mismatch           — procedure count vs equipment count mismatch
-     11. specialty_infrastructure_mismatch — subspecialty vs capacity mismatch
-     12. oversupply_scarcity        — procedure frequency vs facility count
-     13. ngo_overlap                — overlapping NGO presence in same region
-     14. problem_type               — classify gaps as equipment/training/workforce
-     15. specialist_distribution    — specialty → region mapping
-     16. web_capability_mismatch    — description reliability vs actual services
-     17. visiting_vs_permanent      — facility_type vs staffing patterns
-     18. data_staleness             — outdated records (updated_at age scoring)
+    Detects 15 anomaly types (statistical/mathematical — NOT medical domain reasoning):
+      1. contradictory_signals    — conflicting ICU/inpatient statements across facts
+      2. ngo_classification       — direct_operator / supporter / none
+      3. reliability_score        — 0-100 data quality score based on fact density
+      4. unmet_needs              — service gaps by region
+      5. duplicate_facility       — same name prefix in multiple records
+      6. anomaly_flagging         — outlier bed/doctor counts (3 std devs)
+      7. abnormal_ratio           — implausible bed/OR/doctor ratios
+      8. feature_mismatch         — procedure COUNT vs equipment COUNT (numeric)
+      9. oversupply_scarcity      — procedure frequency vs facility count
+     10. ngo_overlap              — overlapping NGO presence in same region
+     11. problem_type             — classify gaps as equipment/training/workforce
+     12. specialist_distribution  — specialty → region mapping
+     13. web_capability_mismatch  — description length vs fact count discrepancy
+     14. visiting_vs_permanent    — facility_type vs doctor count patterns
+     15. data_staleness           — outdated records (updated_at age scoring)
+
+    NOTE: Over-claiming, equipment-procedure mismatch, and subspecialty-infrastructure
+    mismatch are NOT handled here — those require medical domain reasoning and are
+    handled directly by the LLM using genie_chat_tool + vector_search_tool.
 
     Trigger keywords: "anomal", "inconsisten", "contradict", "reliab", "score",
-    "quality", "ngo", "classify", "over-claim", "mismatch", "gap", "unmet",
-    "outlier", "flag", "duplicate", "abnormal", "implausib", "red flag",
-    "problem type", "workforce", "specialist", "visiting staff", "permanent staff",
-    "oversupply", "scarcity", "correlation", "benchmark", "weak operation",
-    "strong claim", "feature mismatch", "ratio vs", "overlapping", "subspecialty".
+    "quality", "ngo", "classify", "gap", "unmet", "outlier", "flag",
+    "duplicate", "abnormal", "red flag", "problem type", "workforce",
+    "specialist", "visiting staff", "permanent staff", "oversupply",
+    "scarcity", "overlapping", "staleness", "stale", "corrobor".
 
     Args:
         query:      Analysis question (e.g., "detect anomalies", "score reliability")
@@ -211,9 +212,120 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     except Exception as exc:
         return f"[Medical Agent Error] {exc}"
 
+
+# ─── Tool 4 — Geospatial Query ───────────────────────────────────────────────
+
+@tool
+def geospatial_query_tool(
+    ref_lat: float = 0.0,
+    ref_lon: float = 0.0,
+    reference_location: str | None = None,
+    radius_km: float = 50.0,
+    condition: str | None = None,
+    analysis_type: str = "nearby",
+    urban_hubs: list[str] | None = None,
+) -> str:
+    """
+    Geospatial facility search using ST_DistanceSpheroid on the WGS84 spheroid.
+
+    analysis_type options:
+      "nearby"      — Find all facilities within radius_km.
+                      Returns: list of facilities sorted by ascending distance.
+      "cold_spot"   — Find regions (states) that have zero facilities matching
+                      the given condition.
+      "urban_rural" — Returns distance from each facility to its nearest hub.
+                      If 'urban_hubs' is not provided, defaults to Ghana's 5 major.
+
+    Args:
+        ref_lat:            Latitude of reference location (optional, if known).
+        ref_lon:            Longitude of reference location (optional, if known).
+        reference_location: Name of the reference city/region (e.g., "Accra").
+                            The tool will dynamically geocode this if provided!
+        radius_km:          Search radius in kilometres (default 50).
+        condition:          Optional keyword to filter by medical condition/procedure.
+        analysis_type:      One of "nearby", "cold_spot", "urban_rural".
+        urban_hubs:         List of city names to act as centers for urban_rural.
+
+    Trigger keywords: "within", "km", "distance", "near", "nearby", "closest",
+    "cold spot", "geographic", "radius", "proximity", "urban", "rural".
+    """
+    from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
+    import requests
+    import os
+
+    # Dynamically geocode reference_location if ref_lat/lon not provided
+    if reference_location and ref_lat == 0.0 and ref_lon == 0.0:
+        api_key = os.getenv("LOCATION_IQ_ACCESS_TOKEN")
+        if not api_key:
+            return "[Geospatial Query Error] LOCATION_IQ_ACCESS_TOKEN not set in environment."
+        try:
+            resp = requests.get(
+                "https://us1.locationiq.com/v1/search",
+                params={"key": api_key, "q": f"{reference_location}, Ghana", "format": "json"},
+                timeout=5
+            )
+            if resp.status_code == 200 and len(resp.json()) > 0:
+                ref_lat = float(resp.json()[0]["lat"])
+                ref_lon = float(resp.json()[0]["lon"])
+            else:
+                return f"[Geospatial Query Error] Could not dynamically geocode '{reference_location}'."
+        except Exception as e:
+            return f"[Geospatial Query Error] Geocoding failed: {e}"
+
+    payload: dict = {
+        "ref_lat":       ref_lat,
+        "ref_lon":       ref_lon,
+        "radius_km":     radius_km,
+        "analysis_type": analysis_type,
+    }
+    if condition:
+        payload["condition"] = condition
+
+    # Dynamically geocode urban hubs if requested
+    if analysis_type == "urban_rural":
+        hubs_list = urban_hubs if urban_hubs else ["Accra", "Kumasi", "Tamale", "Cape Coast", "Takoradi"]
+        
+        api_key = os.getenv("LOCATION_IQ_ACCESS_TOKEN")
+        if not api_key:
+            return "[Geospatial Query Error] LOCATION_IQ_ACCESS_TOKEN not set in environment."
+            
+        resolved_hubs = []
+        for hub in hubs_list:
+            try:
+                resp = requests.get(
+                    "https://us1.locationiq.com/v1/search",
+                    params={"key": api_key, "q": f"{hub}, Ghana", "format": "json"},
+                    timeout=5
+                )
+                if resp.status_code == 200 and len(resp.json()) > 0:
+                    data = resp.json()[0]
+                    resolved_hubs.append({
+                        "name": hub,
+                        "lat": float(data["lat"]),
+                        "lon": float(data["lon"])
+                    })
+            except Exception:
+                pass  # Skip if unreachable
+                
+        if not resolved_hubs:
+            return "[Geospatial Query Error] Failed to geocode urban hubs dynamically."
+            
+        # JSON serialize the array so the SQL parser from_json works across nested structs
+        payload["urban_hubs"] = json.dumps(resolved_hubs)
+
+    try:
+        uc = UCFunctionToolkit(
+            function_names=[f"{CATALOG}.{SCHEMA}.find_facilities_nearby"]
+        )
+        uc_fn = uc.tools[0]
+        return uc_fn.invoke({"query_json": json.dumps(payload)})
+    except Exception as exc:
+        return f"[Geospatial Query Error] {exc}"
+
+
 # ─── Tool list ────────────────────────────────────────────────────────────────
 
-ALL_TOOLS = [genie_chat_tool, vector_search_tool, medical_agent_tool]
+ALL_TOOLS = [genie_chat_tool, vector_search_tool, medical_agent_tool, geospatial_query_tool]
 
 
 # ─── System prompt ─────────────────────────────────────────────────────────────
@@ -227,6 +339,11 @@ A query can match ONE or MORE types simultaneously.
 
 ### Step 1 — Classify the query (check all three):
 
+IS_GEOSPATIAL = True if ANY of these keywords appear:
+  "within", "km", "miles", "distance", "near", "nearby", "closest",
+  "cold spot", "geographic", "radius", "proximity", "urban", "rural",
+  "peri-urban", "how far", "geospatial", "location-based"
+
 IS_QUANTITATIVE = True if ANY of these keywords appear:
   "how many", "count", "total", "average", "sum", "most", "least",
   "top N", "region", "district", "ownership", "beds", "staff",
@@ -236,29 +353,64 @@ IS_QUANTITATIVE = True if ANY of these keywords appear:
 IS_SEMANTIC = True if ANY of these keywords appear:
   "similar", "like", "service", "equipment", "provides", "specialty",
   "has", "can provide", "offers", "what does", "which facilities provide",
-  "capability", "capabilities", "similar to", "what services", "procedures"
+  "capability", "capabilities", "similar to", "what services", "procedures",
+  "over-claim", "implausib", "subspecialty", "equipment mismatch",
+  "corrobor", "camp", "outreach", "medical camp", "referral", "bundle"
 
 IS_ANALYTIC = True if ANY of these keywords appear:
   "anomal", "inconsisten", "contradict", "reliab", "score", "quality",
-  "ngo", "classify", "classif", "over-claim", "mismatch", "gap",
-  "unmet", "outlier", "flag", "duplicate", "abnormal", "implausib",
-  "red flag", "problem type", "workforce", "specialist", "specialist workforce",
-  "visiting staff", "permanent staff", "oversupply", "scarcity",
-  "correlation", "correlat", "benchmark", "weak operation", "strong claim",
-  "contradict", "inconsisten", "feature mismatch", "ratio vs",
-  "overlapping", "equipment mismatch", "subspecialty"
+  "ngo", "classify", "classif", "gap", "unmet", "outlier", "flag",
+  "duplicate", "abnormal", "red flag", "problem type", "workforce",
+  "specialist", "specialist workforce", "visiting staff", "permanent staff",
+  "oversupply", "scarcity", "correlat", "overlapping", "staleness"
 
 ### Step 2 — Route accordingly:
 
-| Classification                | Tools to Call (in order)                  |
-|-------------------------------|-------------------------------------------|
-| IS_QUANTITATIVE only          | genie_chat_tool                           |
-| IS_SEMANTIC only              | vector_search_tool                        |
-| IS_ANALYTIC only              | medical_agent_tool                        |
-| IS_QUANTITATIVE + IS_SEMANTIC | genie_chat_tool, then vector_search_tool  |
-| IS_QUANTITATIVE + IS_ANALYTIC | genie_chat_tool, then medical_agent_tool  |
-| IS_SEMANTIC + IS_ANALYTIC     | vector_search_tool, then medical_agent_tool |
-| ALL THREE                     | genie_chat_tool → vector_search_tool medical_agent_tool |
+| Classification                      | Tools to Call (in order)                                    |
+|-------------------------------------|-------------------------------------------------------------|
+| IS_GEOSPATIAL only                  | geospatial_query_tool                                       |
+| IS_GEOSPATIAL + IS_QUANTITATIVE     | geospatial_query_tool, then genie_chat_tool                 |
+| IS_GEOSPATIAL + IS_SEMANTIC         | geospatial_query_tool, then vector_search_tool              |
+| IS_GEOSPATIAL + IS_ANALYTIC         | geospatial_query_tool, then medical_agent_tool              |
+| IS_QUANTITATIVE only                | genie_chat_tool                                             |
+| IS_SEMANTIC only                    | vector_search_tool                                          |
+| IS_ANALYTIC only                    | medical_agent_tool                                          |
+| IS_QUANTITATIVE + IS_SEMANTIC       | genie_chat_tool, then vector_search_tool                    |
+| IS_QUANTITATIVE + IS_ANALYTIC       | genie_chat_tool, then medical_agent_tool                    |
+| IS_SEMANTIC + IS_ANALYTIC           | vector_search_tool, then medical_agent_tool                 |
+| ALL THREE (no geo)                  | genie_chat_tool → vector_search_tool → medical_agent_tool   |
+
+### Step 2.5 — Geospatial Protocol (applies when IS_GEOSPATIAL = True):
+
+If the user asks for a physical distance search (e.g., "within 50 km of Accra"), you do NOT need to look up exact coordinates.
+Simply pass `reference_location="Accra"` to the `geospatial_query_tool`, and it will dynamically fetch the latitude/longitude for you!
+
+**Choosing `analysis_type`:**
+  • "nearby"      — user asks "within X km" or "near" a location. Provide `reference_location` and `radius_km`.
+  • "cold_spot"   — user asks about regions lacking a service, geographic gaps.
+  • "urban_rural" — user asks about urban vs rural service distribution. You may optionally pass a list of `urban_hubs` 
+                    (e.g., `urban_hubs=["Accra", "Kumasi"]`) to dynamically define the urban centers for this search.
+
+### Step 2.5 — Medical Reasoning Protocol (applies when query involves medical domain judgment):
+
+If the query involves ANY of:
+  • over-claiming or implausible services (e.g., "clinic doing brain surgery")
+  • equipment-capability mismatches (e.g., "has MRI but no radiologist")
+  • subspecialty vs infrastructure plausibility (e.g., "neurosurgery at a small clinic")
+  • general capability plausibility (e.g., "can this facility actually do this?")
+
+Then follow this 3-step reasoning protocol:
+  1. Use genie_chat_tool to fetch the raw facility profile:
+     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, number_doctors
+     → Filter to the relevant facilities (e.g., clinics, pharmacies, dentists)
+  2. Use vector_search_tool with fact_type=["specialty", "equipment", "procedure", "summary", "capability"] to retrieve the detailed fact_text for those facilities.
+  3. Apply YOUR OWN medical expertise:
+     → Is this facility_type capable of these procedures given real-world medical standards?
+     → Does this equipment require specialist support that is not present?
+     → Is this subspecialty realistic given the facility's size/capacity/doctor count?
+     → DO NOT use simple keyword matching — reason about plausibility holistically.
+  4. Report findings with: facility name, facility type, the suspicious claim, your
+     medical reasoning, and severity (high/medium/low).
 
 ### Step 3 — Multi-tool orchestration:
 
