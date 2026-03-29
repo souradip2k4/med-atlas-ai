@@ -105,13 +105,13 @@ class FacilityGeocoder:
                 if not state:
                     result["resolved_state"] = addr.get("state")
 
-            logger.info(
-                "[Geocode] ✔ '%s' → (%.5f, %.5f) via query '%s'",
-                facility_label,
-                result["latitude"],
-                result["longitude"],
-                query,
-            )
+            # logger.info(
+            #     "[Geocode] ✔ '%s' → (%.5f, %.5f) via query '%s'",
+            #     facility_label,
+            #     result["latitude"],
+            #     result["longitude"],
+            #     query,
+            # )
             return result
 
         logger.warning(
