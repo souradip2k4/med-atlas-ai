@@ -491,7 +491,14 @@ def build_graph():
 # in what sequence before the final answer.
 
 class _ToolCallTracker:
-    """Collects tool calls and tool results from LangGraph message stream."""
+    """Collects tool calls and tool results from LangGraph message stream.
+
+    Also builds a structured citation registry from tool outputs.
+    Each tool's output is parsed to extract source rows from:
+      - facility_facts  (vector_search_tool)
+      - facility_records (medical_agent_tool, genie_chat_tool, geospatial_query_tool)
+      - regional_insights (medical_agent_tool Unmet Needs, genie_chat_tool)
+    """
 
     def __init__(self):
         # List of {call_id, name, arguments} seen so far
@@ -501,6 +508,241 @@ class _ToolCallTracker:
         # List of stream events to yield in order
         self.events: list[ResponsesAgentStreamEvent] = []
         self.output_index = 0
+        # Citation registry: ordered list of step citations
+        self._citations: list[dict[str, Any]] = []
+        # step index counter (increments per tool call)
+        self._step_index = 0
+
+    # ── Citation parsers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_vector_search_citations(call_id: str, call_name: str,
+                                       call_args: dict, raw_output: str) -> dict[str, Any]:
+        """
+        Parse vector_search_tool output.
+        Output is a list of LangChain Documents with metadata from facility_facts.
+        """
+        sources: list[dict[str, Any]] = []
+        try:
+            # The raw output from vector_search_tool is a Python repr of a list of Documents.
+            # We extract structured data using regex on the metadata dict.
+            import re
+            # Match each document block
+            doc_pattern = re.compile(
+                r"metadata=\{([^}]+)\}.*?page_content='(.*?)(?='\))",
+                re.DOTALL,
+            )
+            for m in doc_pattern.finditer(raw_output):
+                meta_str = m.group(1)
+                page_content = m.group(2).strip()
+                meta: dict[str, str] = {}
+                for kv in re.finditer(r"'(\w+)':\s*'([^']*)'" , meta_str):
+                    meta[kv.group(1)] = kv.group(2)
+                # Attempt to get facility name from page_content prefix
+                name_match = re.match(r'^([^\n]+?) in ', page_content)
+                facility_name = name_match.group(1).strip() if name_match else None
+                snippet = page_content[:200] + "..." if len(page_content) > 200 else page_content
+                sources.append({
+                    "source_type": "facility_facts",
+                    "fact_id": meta.get("fact_id"),
+                    "facility_id": meta.get("facility_id"),
+                    "facility_name": facility_name,
+                    "fact_type": meta.get("fact_type"),
+                    "excerpt": snippet,
+                })
+        except Exception:
+            pass
+        return {
+            "step_index": None,  # filled in by caller
+            "tool_name": call_name,
+            "call_id": call_id,
+            "query_used": call_args.get("query", ""),
+            "tables_accessed": ["facility_facts"],
+            "sources": sources,
+        }
+
+    @staticmethod
+    def _parse_medical_agent_citations(call_id: str, call_name: str,
+                                       call_args: dict, raw_output: str) -> dict[str, Any]:
+        """
+        Parse medical_agent_tool output.
+        Returns JSON with a 'findings' array from facility_records and/or facility_facts.
+        """
+        sources: list[dict[str, Any]] = []
+        tables_accessed: set[str] = {"facility_records"}
+        try:
+            data = json.loads(raw_output)
+            findings = data.get("findings") or []
+            if isinstance(findings, str):
+                findings = json.loads(findings)
+            for f in (findings or []):
+                if not isinstance(f, dict):
+                    continue
+                finding_type = f.get("type", "")
+                # Determine which tables this finding draws from
+                if finding_type in ("contradictory_signals", "feature_mismatch_raw",
+                                    "ngo_raw_data", "ngo_overlap_raw"):
+                    tables_accessed.add("facility_facts")
+                if finding_type in ("regional_coverage",):
+                    tables_accessed.add("regional_insights")
+                # Build a source entry
+                source: dict[str, Any] = {
+                    "source_type": "facility_records",
+                    "finding_type": finding_type,
+                    "facility_id": f.get("facility_id") or f.get("region"),
+                    "facility_name": f.get("facility_name") or f.get("region"),
+                    "severity": f.get("severity"),
+                    "note": f.get("note") or f.get("reason") or f.get("recommendation"),
+                }
+                # For regional findings, override source_type
+                if finding_type in ("regional_coverage", "data_staleness"):
+                    source["source_type"] = "facility_records"
+                if finding_type == "regional_coverage":
+                    source["source_type"] = "regional_insights"
+                    source["region"] = f.get("region")
+                    source["total_facilities"] = f.get("total_facilities")
+                sources.append(source)
+        except Exception:
+            pass
+        return {
+            "step_index": None,
+            "tool_name": call_name,
+            "call_id": call_id,
+            "query_used": call_args.get("query", ""),
+            "tables_accessed": sorted(tables_accessed),
+            "sources": sources,
+        }
+
+    @staticmethod
+    def _parse_genie_citations(call_id: str, call_name: str,
+                               call_args: dict, raw_output: str) -> dict[str, Any]:
+        """
+        Parse genie_chat_tool output.
+        Genie returns free text but often mentions facility names or regions.
+        We record the query and try to detect which tables are referenced.
+        """
+        import re
+        tables_accessed: list[str] = []
+        raw_lower = raw_output.lower()
+        if any(w in raw_lower for w in ["facility", "hospital", "clinic", "operator"]):
+            tables_accessed.append("facility_records")
+        if any(w in raw_lower for w in ["region", "state", "district", "insight"]):
+            tables_accessed.append("regional_insights")
+        if not tables_accessed:
+            tables_accessed = ["facility_records"]
+        # Try to capture a short snippet of the genie response
+        snippet = raw_output[:400] + "..." if len(raw_output) > 400 else raw_output
+        return {
+            "step_index": None,
+            "tool_name": call_name,
+            "call_id": call_id,
+            "query_used": call_args.get("query", ""),
+            "tables_accessed": tables_accessed,
+            "sources": [{
+                "source_type": "genie_response",
+                "tables_queried": tables_accessed,
+                "excerpt": snippet,
+            }],
+        }
+
+    @staticmethod
+    def _parse_geospatial_citations(call_id: str, call_name: str,
+                                    call_args: dict, raw_output: str) -> dict[str, Any]:
+        """
+        Parse geospatial_query_tool output.
+        Returns a JSON array of facility records with distances.
+        """
+        sources: list[dict[str, Any]] = []
+        try:
+            data = json.loads(raw_output)
+            results = data if isinstance(data, list) else data.get("facilities", [])
+            for r in (results or []):
+                if not isinstance(r, dict):
+                    continue
+                sources.append({
+                    "source_type": "facility_records",
+                    "facility_id": r.get("facility_id"),
+                    "facility_name": r.get("facility_name"),
+                    "city": r.get("city"),
+                    "state": r.get("state"),
+                    "distance_km": r.get("distance_km"),
+                })
+        except Exception:
+            pass
+        return {
+            "step_index": None,
+            "tool_name": call_name,
+            "call_id": call_id,
+            "query_used": str(call_args),
+            "tables_accessed": ["facility_records"],
+            "sources": sources,
+        }
+
+    def _extract_citations(self, call_id: str, tool_content: str) -> None:
+        """Look up the matching tool call and dispatch to the right parser."""
+        # Find the tool call details from pending_calls
+        call_info = next(
+            (c for c in self.pending_calls if c["call_id"] == call_id),
+            None,
+        )
+        if not call_info:
+            return
+        name = call_info["name"]
+        args = call_info["arguments"] if isinstance(call_info["arguments"], dict) else {}
+
+        if name == "vector_search_tool":
+            citation = self._parse_vector_search_citations(call_id, name, args, tool_content)
+        elif name == "medical_agent_tool":
+            citation = self._parse_medical_agent_citations(call_id, name, args, tool_content)
+        elif name == "genie_chat_tool":
+            citation = self._parse_genie_citations(call_id, name, args, tool_content)
+        elif name == "geospatial_query_tool":
+            citation = self._parse_geospatial_citations(call_id, name, args, tool_content)
+        else:
+            citation = {
+                "step_index": None,
+                "tool_name": name,
+                "call_id": call_id,
+                "query_used": str(args),
+                "tables_accessed": [],
+                "sources": [],
+            }
+
+        citation["step_index"] = self._step_index
+        self._step_index += 1
+        self._citations.append(citation)
+
+    def get_citations(self) -> dict[str, Any]:
+        """Return the full citation object for inclusion in the API response."""
+        all_facilities: list[str] = []
+        all_tools: list[str] = []
+        all_tables: list[str] = []
+        total_sources = 0
+
+        for step in self._citations:
+            tool = step.get("tool_name", "")
+            if tool and tool not in all_tools:
+                all_tools.append(tool)
+            for tbl in step.get("tables_accessed", []):
+                if tbl not in all_tables:
+                    all_tables.append(tbl)
+            for src in step.get("sources", []):
+                total_sources += 1
+                name = src.get("facility_name")
+                if name and name not in all_facilities:
+                    all_facilities.append(name)
+
+        return {
+            "steps": self._citations,
+            "summary": {
+                "total_sources": total_sources,
+                "facilities_referenced": all_facilities,
+                "tools_used": all_tools,
+                "tables_accessed": all_tables,
+            },
+        }
+
+    # ── Event helpers ─────────────────────────────────────────────────────────
 
     def _emit(self, item: OutputItem) -> None:
         self.events.append(
@@ -566,6 +808,9 @@ class _ToolCallTracker:
             tool_content = getattr(msg, "content", None) or ""
             self.call_results[call_id] = tool_content
 
+            # Extract citations from this tool result
+            self._extract_citations(call_id, tool_content if isinstance(tool_content, str) else str(tool_content))
+
             # Emit the function_call_output event
             self._emit(OutputItem(
                 type="function_call_output",
@@ -582,28 +827,27 @@ class _ToolCallTracker:
         return self.events
 
 
+
 # ─── ResponsesAgent (MLflow 3.x deployment interface) ──────────────────────────
+
+from typing import NamedTuple
+
+
+class _AgentResult(NamedTuple):
+    """Internal result wrapper carrying both the response and citation data."""
+    response: ResponsesAgentResponse
+    citations: dict[str, Any]
+
 
 class MedAtlasAgent(ResponsesAgent):
     def __init__(self):
         self.graph = build_graph()
 
-    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
-        outputs = [
-            event.item
-            for event in self.predict_stream(request)
-            if event.type == "response.output_item.done"
-        ]
-        return ResponsesAgentResponse(output=outputs)
-
-    def predict_stream(
-        self, request: ResponsesAgentRequest
-    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
-        # Convert input to LangGraph message format
+    def _run_graph(
+        self, request: ResponsesAgentRequest, tracker: _ToolCallTracker
+    ) -> list[ResponsesAgentStreamEvent]:
+        """Run the LangGraph, process all messages into tracker, return events."""
         messages = to_chat_completions_input([m.model_dump() for m in request.input])
-
-        tracker = _ToolCallTracker()
-
         for event in self.graph.stream(
             {"messages": messages},
             config={"recursion_limit": 100},
@@ -611,18 +855,40 @@ class MedAtlasAgent(ResponsesAgent):
         ):
             if event[0] != "updates":
                 continue
-
             for node_data in event[1].values():
                 if not isinstance(node_data, dict) or not node_data.get("messages"):
                     continue
-
                 for msg in node_data["messages"]:
                     tracker.process_message(msg)
+        return tracker.finalize()
 
-        yield from tracker.finalize()
+    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
+        """MLflow-compatible predict (no citations)."""
+        tracker = _ToolCallTracker()
+        events = self._run_graph(request, tracker)
+        outputs = [e.item for e in events if e.type == "response.output_item.done"]
+        return ResponsesAgentResponse(output=outputs)
+
+    def predict_with_citations(self, request: ResponsesAgentRequest) -> _AgentResult:
+        """Run the agent and return both the response AND structured citations."""
+        tracker = _ToolCallTracker()
+        events = self._run_graph(request, tracker)
+        outputs = [e.item for e in events if e.type == "response.output_item.done"]
+        return _AgentResult(
+            response=ResponsesAgentResponse(output=outputs),
+            citations=tracker.get_citations(),
+        )
+
+    def predict_stream(
+        self, request: ResponsesAgentRequest
+    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
+        """Streaming predict — yields events as they arrive (no citations in stream)."""
+        tracker = _ToolCallTracker()
+        yield from self._run_graph(request, tracker)
 
 
 # ─── Export ────────────────────────────────────────────────────────────────────
 
 AGENT = MedAtlasAgent()
 mlflow.models.set_model(AGENT)
+
