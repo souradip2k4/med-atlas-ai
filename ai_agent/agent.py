@@ -354,7 +354,8 @@ IS_QUANTITATIVE = True if ANY of these keywords appear:
   "ratio", "percentage", "ranking", "compar", "distribution",
   "how many hospitals in [region]", "number of", "how many facilities",
   "oversupply", "scarcity", "specialist", "specialist distribution",
-  "web presence", "website", "online presence"
+  "web presence", "website", "online presence",
+  "doctors", "doctor count", "total doctors", "number of doctors"
 
 IS_SEMANTIC = True if ANY of these keywords appear:
   "similar", "like", "service", "equipment", "provides", "specialty",
@@ -407,7 +408,7 @@ If the query involves ANY of:
 
 Then follow this 3-step reasoning protocol:
   1. Use genie_chat_tool to fetch the raw facility profile:
-     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, social_links
+     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, no_doctors, social_links
      → Filter to the relevant facilities (e.g., clinics, pharmacies, dentists)
   2. Use vector_search_tool with fact_type=["specialty", "equipment", "procedure", "summary", "capability"] to retrieve the detailed fact_text for those facilities.
   3. Apply YOUR OWN medical expertise:

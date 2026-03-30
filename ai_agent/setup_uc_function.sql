@@ -7,7 +7,7 @@
 -- Schema (from IDP/storage/models.py):
 --   facility_records: facility_id, facility_name, organization_type ('facility'|'ngo'),
 --     specialties[], procedures[], equipment[], capabilities[],
---     city, state, country, country_code, no_beds,
+--     city, state, country, country_code, no_beds, no_doctors,
 --     operator_type ('public'|'private'), facility_type ('hospital'|'clinic'|'farmacy'|'doctor'|'dentist'),
 --     affiliation_types[], websites[], social_links{}, description, ...
 --     created_at, updated_at
@@ -92,6 +92,7 @@ THEN (
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       COALESCE(ff.cnt, 0) AS n_facts,
       COALESCE(CAST(fr.no_beds AS INT), 0) AS no_beds,
+      COALESCE(fr.no_doctors, 0) AS no_doctors,
       70
         - CASE WHEN COALESCE(ff.cnt, 0) < 2 THEN 20
                WHEN COALESCE(ff.cnt, 0) < 4 THEN 10
@@ -123,7 +124,8 @@ THEN (
                  WHEN reliability_score >= 60 THEN 'medium'
                  ELSE 'low' END,
           'n_facts', n_facts,
-          'no_beds', no_beds
+          'no_beds', no_beds,
+          'no_doctors', no_doctors
         )))
       )
     )
@@ -206,11 +208,12 @@ WHEN LOWER(parse_json(query_json):query) RLIKE 'outlier|anomal|flag|unusual'
 THEN (
   WITH cap_stats AS (
     SELECT
-      AVG(CAST(no_beds AS DOUBLE)) AS m,
-      STDDEV(CAST(no_beds AS DOUBLE)) AS s
+      AVG(CAST(no_beds AS DOUBLE)) AS m_beds,
+      STDDEV(CAST(no_beds AS DOUBLE)) AS s_beds,
+      AVG(CAST(no_doctors AS DOUBLE)) AS m_docs,
+      STDDEV(CAST(no_doctors AS DOUBLE)) AS s_docs
     FROM med_atlas_ai.default.facility_records
     WHERE organization_type = 'facility'
-      AND no_beds IS NOT NULL AND CAST(no_beds AS INT) > 0
   ),
   outliers AS (
     SELECT
@@ -218,17 +221,37 @@ THEN (
       fr.facility_name,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       CAST(fr.no_beds AS INT) AS value,
-      ROUND(cs.m, 1) AS mean,
-      ROUND(cs.s, 1) AS std,
+      ROUND(cs.m_beds, 1) AS mean,
+      ROUND(cs.s_beds, 1) AS std,
       'no_beds' AS field,
       'high' AS severity,
-      'Outlier: ' || fr.no_beds || ' beds (mean=' || ROUND(cs.m, 0) || ')' AS reason
+      'Outlier: ' || fr.no_beds || ' beds (mean=' || ROUND(cs.m_beds, 0) || ')' AS reason
     FROM med_atlas_ai.default.facility_records fr, cap_stats cs
     WHERE fr.organization_type = 'facility'
       AND fr.no_beds IS NOT NULL AND CAST(fr.no_beds AS INT) > 0
+      AND cs.m_beds IS NOT NULL AND cs.s_beds IS NOT NULL
       AND (
-        CAST(fr.no_beds AS DOUBLE) < cs.m - 3 * cs.s
-        OR CAST(fr.no_beds AS DOUBLE) > cs.m + 3 * cs.s
+        CAST(fr.no_beds AS DOUBLE) < cs.m_beds - 3 * cs.s_beds
+        OR CAST(fr.no_beds AS DOUBLE) > cs.m_beds + 3 * cs.s_beds
+      )
+    UNION ALL
+    SELECT
+      fr.facility_id,
+      fr.facility_name,
+      COALESCE(fr.facility_type, 'unknown') AS facility_type,
+      CAST(fr.no_doctors AS INT) AS value,
+      ROUND(cs.m_docs, 1) AS mean,
+      ROUND(cs.s_docs, 1) AS std,
+      'no_doctors' AS field,
+      'high' AS severity,
+      'Outlier: ' || fr.no_doctors || ' doctors (mean=' || ROUND(cs.m_docs, 0) || ')' AS reason
+    FROM med_atlas_ai.default.facility_records fr, cap_stats cs
+    WHERE fr.organization_type = 'facility'
+      AND fr.no_doctors IS NOT NULL AND CAST(fr.no_doctors AS INT) > 0
+      AND cs.m_docs IS NOT NULL AND cs.s_docs IS NOT NULL
+      AND (
+        CAST(fr.no_doctors AS DOUBLE) < cs.m_docs - 3 * cs.s_docs
+        OR CAST(fr.no_doctors AS DOUBLE) > cs.m_docs + 3 * cs.s_docs
       )
   )
   SELECT to_json(
@@ -352,6 +375,7 @@ THEN (
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       fr.operator_type,
       COALESCE(CAST(fr.no_beds AS INT), 0) AS no_beds,
+      COALESCE(CAST(fr.no_doctors AS INT), 0) AS no_doctors,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
        WHERE ff.facility_id = fr.facility_id AND ff.fact_type = 'equipment') AS n_equip,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
@@ -375,6 +399,7 @@ THEN (
           'facility_type', facility_type,
           'operator_type', operator_type,
           'no_beds', no_beds,
+          'no_doctors', no_doctors,
           'equipment_count', n_equip,
           'specialty_count', n_specialties,
           'procedure_count', n_procedures,
@@ -385,6 +410,7 @@ THEN (
   )
   FROM gap_analysis
   WHERE n_equip = 0 OR n_specialties = 0 OR n_procedures = 0
+)
 
 -- 10. Data Staleness (updated_at age scoring)
 WHEN LOWER(parse_json(query_json):query) RLIKE 'staleness|stale|data age|data outdated|outdated|when updated|last updated'

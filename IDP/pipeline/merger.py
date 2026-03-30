@@ -76,6 +76,30 @@ def _extract_bed_count(arrays: list[Optional[List[str]]]) -> Optional[int]:
     return None
 
 
+def _extract_doctor_count(arrays: list[Optional[List[str]]]) -> Optional[int]:
+    """Scan capability/procedure strings for doctor/staff count numbers.
+
+    Used as a fallback when the CSV ``numberDoctors`` field is null.
+    Looks for patterns like "10 doctors", "staff of 5 physicians", "3 medical officers".
+    """
+    patterns = [
+        r'(\d+)\s*[-–]?\s*doctors?\b',                          # "10 doctors"
+        r'(\d+)\s*[-–]?\s*physicians?\b',                       # "5 physicians"
+        r'(\d+)\s*[-–]?\s*medical\s*officers?',                 # "3 medical officers"
+        r'staff\s*(?:of|:)?\s*(\d+)',                            # "staff of 12"
+        r'(\d+)\s*clinical\s*staff',                             # "8 clinical staff"
+    ]
+    for arr in arrays:
+        if not arr:
+            continue
+        for item in arr:
+            for pat in patterns:
+                m = re.search(pat, item, re.IGNORECASE)
+                if m:
+                    return int(m.group(1))
+    return None
+
+
 
 
 # ── Ghana city → region lookup (deterministic fallback when LLM cannot infer) ──
@@ -462,6 +486,14 @@ def merge_extraction_results(
     if no_beds is None:
         no_beds = _extract_bed_count([capabilities, equipment])
 
+    # ── Doctor count: LLM primary → CSV secondary → free-text fallback ──
+    no_doctors = _first_non_null(
+        getattr(facts, "noDocors", None) if facts else None,   # Step 2 LLM (primary)
+        _try_int(row.get("numberdoctors")),                     # CSV column (secondary)
+    )
+    if no_doctors is None:
+        no_doctors = _extract_doctor_count([procedures, capabilities])
+
     # ── Text & Affiliations ──
     desc = _first_non_null(
         getattr(facts, "description", None) if facts else None,  # Step 2 LLM-generated
@@ -520,6 +552,7 @@ def merge_extraction_results(
         "year_established": _try_int(year_established),
         "accepts_volunteers": accepts_volunteers,
         "no_beds": _try_int(no_beds),
+        "no_doctors": _try_int(no_doctors),
         "description": desc,
         "mission_statement": mission_statement,
         "affiliation_types": affiliation_types or None,
