@@ -76,3 +76,29 @@ def synthesize_row_text(row: Dict[str, Any]) -> str:
         lines.append(f"{label}: {normalised_val}")
 
     return "\n".join(lines)
+
+
+# ── Targeted synthesizers (Phase 2: reduced LLM scope) ───────────────────
+
+# Columns relevant to Step 1 (org classification)
+_ORG_CLASSIFICATION_COLS = {
+    "name", "description", "organization_type",
+}
+
+# Columns relevant to Step 2 (fact extraction + description generation)
+_FACT_EXTRACTION_COLS = {
+    "name", "description",
+    "specialties", "procedure", "equipment", "capability",
+}
+
+
+def synthesize_for_org_classification(row: Dict[str, Any]) -> str:
+    """Build text from only the columns needed for org type classification."""
+    filtered = {k: v for k, v in row.items() if k.lower() in _ORG_CLASSIFICATION_COLS}
+    return synthesize_row_text(filtered)
+
+
+def synthesize_for_fact_extraction(row: Dict[str, Any]) -> str:
+    """Build text from only the columns needed for fact/description extraction."""
+    filtered = {k: v for k, v in row.items() if k.lower() in _FACT_EXTRACTION_COLS}
+    return synthesize_row_text(filtered)
