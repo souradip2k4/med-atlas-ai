@@ -10,6 +10,7 @@ Rules
 * Populates provenance, confidence, and timestamp fields.
 """
 
+import re
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -48,6 +49,50 @@ def _first_non_null(*values: Any) -> Any:
     for v in values:
         if v is not None and v != "" and v != []:
             return v
+    return None
+
+
+def _extract_bed_count(arrays: list[Optional[List[str]]]) -> Optional[int]:
+    """Scan capability/equipment strings for bed/capacity numbers.
+
+    Used as a fallback when the LLM did not extract ``capacity`` as a
+    structured integer — the data may still be present as free-text
+    like "Maintains 15 wards with 300 operational beds".
+    """
+    patterns = [
+        r'(\d+)\s*[-–]?\s*beds?\b',                           # "300 beds", "39-bed"
+        r'bed\s*capacity\s*(?:of\s*)?(\d+)',                   # "bed capacity of 39"
+        r'(\d+)\s*operational\s*beds',                         # "300 operational beds"
+        r'capacity\s*(?:of|to)\s*(?:accommodate\s*)?(\d+)',    # "capacity to accommodate 600"
+    ]
+    for arr in arrays:
+        if not arr:
+            continue
+        for item in arr:
+            for pat in patterns:
+                m = re.search(pat, item, re.IGNORECASE)
+                if m:
+                    return int(m.group(1))
+    return None
+
+
+def _extract_doctor_count(arrays: list[Optional[List[str]]]) -> Optional[int]:
+    """Scan capability/equipment strings for doctor counts.
+
+    Fallback when ``number_doctors`` was not extracted as a structured integer.
+    """
+    patterns = [
+        r'(\d+)\s*(?:medical\s*)?doctors?\b',
+        r'(\d+)\s*physicians?\b',
+    ]
+    for arr in arrays:
+        if not arr:
+            continue
+        for item in arr:
+            for pat in patterns:
+                m = re.search(pat, item, re.IGNORECASE)
+                if m:
+                    return int(m.group(1))
     return None
 
 
@@ -426,17 +471,26 @@ def merge_extraction_results(
         _try_bool(row.get("acceptsvolunteers")),
     )
     number_doctors = _first_non_null(
-        fac.numberDoctors if fac else None,
+        getattr(facts, "numberDoctors", None) if facts else None,  # Step 2 LLM (primary)
+        fac.numberDoctors if fac else None,                         # Step 4 legacy (now None)
         _try_int(row.get("numberdoctors")),
     )
-    capacity = _first_non_null(
-        fac.capacity if fac else None,
-        _try_int(row.get("capacity")),
+    no_beds = _first_non_null(
+        getattr(facts, "noBeds", None) if facts else None,          # Step 2 LLM (primary)
+        fac.noBeds if fac else None,                                 # Step 4 legacy (now None)
+        _try_int(row.get("capacity")),  # CSV column still named 'capacity'
     )
-    
+
+    # ── Regex fallback: recover bed/doctor counts from free-text ──
+    if no_beds is None:
+        no_beds = _extract_bed_count([capabilities, equipment])
+    if number_doctors is None:
+        number_doctors = _extract_doctor_count([capabilities, equipment])
+
     # ── Text & Affiliations ──
     desc = _first_non_null(
-        getattr(fac, "description", None) if fac else None,
+        getattr(facts, "description", None) if facts else None,  # Step 2 LLM-generated
+        getattr(fac, "description", None) if fac else None,      # Step 4 (legacy, now None)
         getattr(org, "organizationDescription", None) if org else None,
         row.get("description")
     )
@@ -484,7 +538,7 @@ def merge_extraction_results(
         "year_established": _try_int(year_established),
         "accepts_volunteers": _try_bool(accepts_volunteers),
         "number_doctors": _try_int(number_doctors),
-        "capacity": _try_int(capacity),
+        "no_beds": _try_int(no_beds),
         "description": desc,
         "mission_statement": mission_statement,
         "affiliation_types": affiliation_types or None,

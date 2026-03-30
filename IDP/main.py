@@ -204,7 +204,7 @@ def _compute_regional_insights(db) -> None:
     # Base select needed for all aggregations
     base_df = records_df.select(
         "facility_id", "country", "state", "city", 
-        "capacity", "number_doctors", "operator_type",
+        "no_beds", "number_doctors", "operator_type",
         "specialties", "procedures", "equipment", "capabilities"
     )
     
@@ -213,7 +213,7 @@ def _compute_regional_insights(db) -> None:
     # 1. OVERVIEW (Totals per region)
     overview_df = base_df.groupBy("country", "state", "city").agg(
         F.countDistinct("facility_id").alias("facility_count"),
-        F.sum("capacity").alias("total_beds"),
+        F.sum("no_beds").alias("total_beds"),
         F.sum("number_doctors").alias("total_doctors"),
         F.collect_set("facility_id").alias("contributing_facility_ids")
     )
@@ -228,7 +228,7 @@ def _compute_regional_insights(db) -> None:
     # 2. OPERATOR TYPE
     operator_df = base_df.filter(F.col("operator_type").isNotNull()).groupBy("country", "state", "city", "operator_type").agg(
         F.countDistinct("facility_id").alias("facility_count"),
-        F.sum("capacity").alias("total_beds"),
+        F.sum("no_beds").alias("total_beds"),
         F.sum("number_doctors").alias("total_doctors"),
         F.collect_set("facility_id").alias("contributing_facility_ids")
     )
@@ -258,14 +258,13 @@ def _compute_regional_insights(db) -> None:
             "contributing_facility_ids"
         )
 
-    # 3. SPECIALTIES
+    # 3. SPECIALTIES (camelCase enum values — groups correctly)
     insights_dfs.append(_explode_and_agg("specialties", "specialty"))
-    # 4. PROCEDURES
-    insights_dfs.append(_explode_and_agg("procedures", "procedure"))
-    # 5. EQUIPMENT
-    insights_dfs.append(_explode_and_agg("equipment", "equipment"))
-    # 6. CAPABILITIES
-    insights_dfs.append(_explode_and_agg("capabilities", "capability"))
+    # NOTE: procedure, equipment, capability categories removed —
+    # free-text strings create noisy duplicates (e.g. "Offers internal
+    # medicine services" vs "Provides internal medicine services") and
+    # bury numeric data in prose.  Genie handles those queries via
+    # facility_records + facility_facts directly.
 
     # Union all slices together
     final_insights = insights_dfs[0]

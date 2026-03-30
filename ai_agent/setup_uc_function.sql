@@ -7,7 +7,7 @@
 -- Schema (from IDP/storage/models.py):
 --   facility_records: facility_id, facility_name, organization_type ('facility'|'ngo'),
 --     specialties[], procedures[], equipment[], capabilities[],
---     city, state, country, country_code, number_doctors, capacity,
+--     city, state, country, country_code, number_doctors, no_beds,
 --     operator_type ('public'|'private'), facility_type ('hospital'|'clinic'|'pharmacy'|'doctor'|'dentist'),
 --     affiliation_types[], websites[], description, ...
 --     created_at, updated_at
@@ -102,14 +102,14 @@ THEN (
       fr.facility_name,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       COALESCE(ff.cnt, 0) AS n_facts,
-      COALESCE(CAST(fr.capacity AS INT), 0) AS capacity,
+      COALESCE(CAST(fr.no_beds AS INT), 0) AS no_beds,
       COALESCE(fr.number_doctors, 0) AS number_doctors,
       70
         - CASE WHEN COALESCE(ff.cnt, 0) < 2 THEN 20
                WHEN COALESCE(ff.cnt, 0) < 4 THEN 10
                ELSE 0 END
-        - CASE WHEN fr.capacity IS NOT NULL AND CAST(fr.capacity AS INT) > 500 THEN 15 ELSE 0 END
-        - CASE WHEN fr.capacity IS NULL AND fr.facility_type = 'hospital' THEN 10 ELSE 0 END
+        - CASE WHEN fr.no_beds IS NOT NULL AND CAST(fr.no_beds AS INT) > 500 THEN 15 ELSE 0 END
+        - CASE WHEN fr.no_beds IS NULL AND fr.facility_type = 'hospital' THEN 10 ELSE 0 END
         AS reliability_score
     FROM med_atlas_ai.default.facility_records fr
     LEFT JOIN (
@@ -135,7 +135,7 @@ THEN (
                  WHEN reliability_score >= 60 THEN 'medium'
                  ELSE 'low' END,
           'n_facts', n_facts,
-          'capacity', capacity,
+          'no_beds', no_beds,
           'number_doctors', number_doctors
         )))
       )
@@ -152,21 +152,52 @@ THEN (
 -- by the LLM agent directly using genie_chat_tool + vector_search_tool.
 
 -- 6. Unmet Needs / Regional Gaps
+-- Queries facility_records arrays directly (specialties, procedures,
+-- capabilities, equipment) instead of regional_insights free-text rows.
 WHEN LOWER(parse_json(query_json):query) RLIKE 'unmet|gap|need|service gap'
 THEN (
   WITH region_services AS (
     SELECT
-      ri.state AS region,
-      MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'dialysis|nephrology|kidney' THEN 1 ELSE 0 END) AS has_dialysis,
-      MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'cardiac|cardiology|heart' THEN 1 ELSE 0 END) AS has_cardiac,
-      MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'neonatal|nicu|newborn' THEN 1 ELSE 0 END) AS has_neonatal,
-      MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'mri|magnetic resonance' THEN 1 ELSE 0 END) AS has_mri,
-      MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'cancer|oncology|chemotherapy' THEN 1 ELSE 0 END) AS has_cancer,
-      MAX(CASE WHEN LOWER(ri.insight_value) RLIKE 'trauma|orthopaedic surgery' THEN 1 ELSE 0 END) AS has_trauma
-    FROM med_atlas_ai.default.regional_insights ri
-    WHERE ri.state IS NOT NULL
-      AND ri.insight_category IN ('specialty', 'procedure', 'capability')
-    GROUP BY ri.state
+      fr.state AS region,
+      MAX(CASE WHEN LOWER(
+          COALESCE(ARRAY_JOIN(fr.specialties, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.procedures, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.capabilities, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.equipment, ' '), '')
+        ) RLIKE 'dialysis|nephrology|kidney' THEN 1 ELSE 0 END) AS has_dialysis,
+      MAX(CASE WHEN LOWER(
+          COALESCE(ARRAY_JOIN(fr.specialties, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.procedures, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.capabilities, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.equipment, ' '), '')
+        ) RLIKE 'cardiac|cardiology|heart' THEN 1 ELSE 0 END) AS has_cardiac,
+      MAX(CASE WHEN LOWER(
+          COALESCE(ARRAY_JOIN(fr.specialties, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.procedures, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.capabilities, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.equipment, ' '), '')
+        ) RLIKE 'neonatal|nicu|newborn' THEN 1 ELSE 0 END) AS has_neonatal,
+      MAX(CASE WHEN LOWER(
+          COALESCE(ARRAY_JOIN(fr.specialties, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.procedures, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.capabilities, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.equipment, ' '), '')
+        ) RLIKE 'mri|magnetic resonance' THEN 1 ELSE 0 END) AS has_mri,
+      MAX(CASE WHEN LOWER(
+          COALESCE(ARRAY_JOIN(fr.specialties, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.procedures, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.capabilities, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.equipment, ' '), '')
+        ) RLIKE 'cancer|oncology|chemotherapy' THEN 1 ELSE 0 END) AS has_cancer,
+      MAX(CASE WHEN LOWER(
+          COALESCE(ARRAY_JOIN(fr.specialties, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.procedures, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.capabilities, ' '), '') || ' ' ||
+          COALESCE(ARRAY_JOIN(fr.equipment, ' '), '')
+        ) RLIKE 'trauma|orthopaedic surgery' THEN 1 ELSE 0 END) AS has_trauma
+    FROM med_atlas_ai.default.facility_records fr
+    WHERE fr.state IS NOT NULL
+    GROUP BY fr.state
   ),
   gaps AS (
     SELECT region, 'dialysis' AS service, has_dialysis = 0 AS is_gap, 'critical' AS severity FROM region_services
@@ -260,10 +291,10 @@ THEN (
     SELECT
       fr.facility_id,
       fr.facility_name,
-      COALESCE(fr.capacity, 0) AS beds,
+      COALESCE(fr.no_beds, 0) AS beds,
       COALESCE(fr.number_doctors, 0) AS doctors,
-      CASE WHEN fr.capacity IS NOT NULL AND fr.capacity > 0 AND fr.number_doctors IS NOT NULL AND fr.number_doctors > 0
-           THEN ROUND(CAST(fr.capacity AS DOUBLE) / fr.number_doctors, 1)
+      CASE WHEN fr.no_beds IS NOT NULL AND fr.no_beds > 0 AND fr.number_doctors IS NOT NULL AND fr.number_doctors > 0
+           THEN ROUND(CAST(fr.no_beds AS DOUBLE) / fr.number_doctors, 1)
            ELSE NULL END AS bed_per_doctor
     FROM med_atlas_ai.default.facility_records fr
     WHERE fr.organization_type = 'facility'
@@ -309,35 +340,35 @@ THEN (
     )
 )
 
--- 9. Anomaly Flagging (capacity outliers)
+-- 9. Anomaly Flagging (bed count outliers)
 WHEN LOWER(parse_json(query_json):query) RLIKE 'outlier|anomal|flag|unusual'
   AND LOWER(parse_json(query_json):query) NOT RLIKE 'abnormal|ratio'
 THEN (
   WITH cap_stats AS (
     SELECT
-      AVG(CAST(capacity AS DOUBLE)) AS m,
-      STDDEV(CAST(capacity AS DOUBLE)) AS s
+      AVG(CAST(no_beds AS DOUBLE)) AS m,
+      STDDEV(CAST(no_beds AS DOUBLE)) AS s
     FROM med_atlas_ai.default.facility_records
     WHERE organization_type = 'facility'
-      AND capacity IS NOT NULL AND CAST(capacity AS INT) > 0
+      AND no_beds IS NOT NULL AND CAST(no_beds AS INT) > 0
   ),
   outliers AS (
     SELECT
       fr.facility_id,
       fr.facility_name,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
-      CAST(fr.capacity AS INT) AS value,
+      CAST(fr.no_beds AS INT) AS value,
       ROUND(cs.m, 1) AS mean,
       ROUND(cs.s, 1) AS std,
-      'capacity' AS field,
+      'no_beds' AS field,
       'high' AS severity,
-      'Outlier: ' || fr.capacity || ' bed capacity (mean=' || ROUND(cs.m, 0) || ')' AS reason
+      'Outlier: ' || fr.no_beds || ' beds (mean=' || ROUND(cs.m, 0) || ')' AS reason
     FROM med_atlas_ai.default.facility_records fr, cap_stats cs
     WHERE fr.organization_type = 'facility'
-      AND fr.capacity IS NOT NULL AND CAST(fr.capacity AS INT) > 0
+      AND fr.no_beds IS NOT NULL AND CAST(fr.no_beds AS INT) > 0
       AND (
-        CAST(fr.capacity AS DOUBLE) < cs.m - 3 * cs.s
-        OR CAST(fr.capacity AS DOUBLE) > cs.m + 3 * cs.s
+        CAST(fr.no_beds AS DOUBLE) < cs.m - 3 * cs.s
+        OR CAST(fr.no_beds AS DOUBLE) > cs.m + 3 * cs.s
       )
   )
   SELECT to_json(
@@ -529,7 +560,7 @@ THEN (
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       COALESCE(fr.number_doctors, 0) AS doctors,
       fr.number_doctors IS NULL AS has_no_doctor_record,
-      COALESCE(CAST(fr.capacity AS INT), 0) AS beds,
+      COALESCE(CAST(fr.no_beds AS INT), 0) AS beds,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
        WHERE ff.facility_id = fr.facility_id AND ff.fact_type = 'equipment') AS n_equip,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
@@ -677,7 +708,7 @@ THEN (
       fr.facility_name,
       fr.websites,
       fr.description,
-      fr.capacity,
+      fr.no_beds,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
        WHERE ff.facility_id = fr.facility_id) AS n_facts,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
@@ -699,7 +730,7 @@ THEN (
           'description_length', LENGTH(COALESCE(description, '')),
           'n_facts_recorded', n_facts,
           'n_services', n_services,
-          'capacity', capacity,
+          'no_beds', no_beds,
           'issue',
             CASE
               WHEN description IS NOT NULL AND LENGTH(description) > 200 AND n_facts = 0
@@ -737,7 +768,7 @@ THEN (
           'facility_type', COALESCE(fr.facility_type, 'unknown'),
           'operator_type', COALESCE(fr.operator_type, 'unknown'),
           'number_doctors', COALESCE(fr.number_doctors, 0),
-          'capacity', COALESCE(CAST(fr.capacity AS INT), 0),
+          'no_beds', COALESCE(CAST(fr.no_beds AS INT), 0),
           'staffing_pattern',
             CASE
               WHEN fr.facility_type = 'clinic' AND COALESCE(fr.number_doctors, 0) = 0

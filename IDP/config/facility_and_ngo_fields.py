@@ -159,10 +159,20 @@ class Facility(BaseOrganization):
         None, description="Total floor area of the facility in square meters"
     )
     numberDoctors: Optional[int] = Field(
-        None, description="Total number of medical doctors working at the facility"
+        None,
+        description=(
+            "Total number of medical doctors. Scan ALL text fields — especially "
+            "capability, equipment, and procedure — for phrases like '5 doctors', "
+            "'12 physicians', 'medical staff of 8'. Extract ONLY the integer."
+        ),
     )
-    capacity: Optional[int] = Field(
-        None, description="Overall inpatient bed capacity of the facility"
+    noBeds: Optional[int] = Field(
+        None,
+        description=(
+            "Total inpatient bed count. Scan ALL text fields — especially equipment , equipment, and procedure"
+            "— for phrases like '300 beds', 'bed capacity of 39', "
+            "'100-bed', 'capacity to accommodate 600'. Extract ONLY the integer."
+        ),
     )
 
     @field_validator("facilityTypeId", "operatorTypeId", mode="before")
