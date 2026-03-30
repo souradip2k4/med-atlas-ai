@@ -7,8 +7,8 @@
 -- Schema (from IDP/storage/models.py):
 --   facility_records: facility_id, facility_name, organization_type ('facility'|'ngo'),
 --     specialties[], procedures[], equipment[], capabilities[],
---     city, state, country, country_code, number_doctors, no_beds,
---     operator_type ('public'|'private'), facility_type ('hospital'|'clinic'|'pharmacy'|'doctor'|'dentist'),
+--     city, state, country, country_code, no_beds,
+--     total_facts, and more._type ('public'|'private'), facility_type ('hospital'|'clinic'|'pharmacy'|'doctor'|'dentist'),
 --     affiliation_types[], websites[], description, ...
 --     created_at, updated_at
 --   facility_facts: facility_id, fact_text, fact_type, source_text
@@ -103,7 +103,6 @@ THEN (
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       COALESCE(ff.cnt, 0) AS n_facts,
       COALESCE(CAST(fr.no_beds AS INT), 0) AS no_beds,
-      COALESCE(fr.number_doctors, 0) AS number_doctors,
       70
         - CASE WHEN COALESCE(ff.cnt, 0) < 2 THEN 20
                WHEN COALESCE(ff.cnt, 0) < 4 THEN 10
@@ -135,8 +134,7 @@ THEN (
                  WHEN reliability_score >= 60 THEN 'medium'
                  ELSE 'low' END,
           'n_facts', n_facts,
-          'no_beds', no_beds,
-          'number_doctors', number_doctors
+          'no_beds', no_beds
         )))
       )
     )
@@ -283,66 +281,8 @@ THEN (
   WHERE rn = 1
 )
 
--- 8. Abnormal Ratios (bed/doctor/OR implausibility) — must come before branch 9
--- because branch 9 also matches "abnormal" and we want the specific ratio check first.
-WHEN LOWER(parse_json(query_json):query) RLIKE 'abnormal|ratio|bed.to|beds.to|doctor.to|bedper|beds per|ratio vs'
-THEN (
-  WITH ratio_stats AS (
-    SELECT
-      fr.facility_id,
-      fr.facility_name,
-      COALESCE(fr.no_beds, 0) AS beds,
-      COALESCE(fr.number_doctors, 0) AS doctors,
-      CASE WHEN fr.no_beds IS NOT NULL AND fr.no_beds > 0 AND fr.number_doctors IS NOT NULL AND fr.number_doctors > 0
-           THEN ROUND(CAST(fr.no_beds AS DOUBLE) / fr.number_doctors, 1)
-           ELSE NULL END AS bed_per_doctor
-    FROM med_atlas_ai.default.facility_records fr
-    WHERE fr.organization_type = 'facility'
-      AND fr.facility_type IN ('hospital', 'clinic')
-  ),
-  stats AS (
-    SELECT
-      AVG(bed_per_doctor) AS m_ratio,
-      STDDEV(bed_per_doctor) AS s_ratio
-    FROM ratio_stats
-    WHERE bed_per_doctor IS NOT NULL
-  )
-  SELECT to_json(
-    map_from_arrays(
-      array('query', 'findings'),
-      array(
-        parse_json(query_json):query,
-        to_json(array_agg(named_struct(
-          'type', 'abnormal_ratio',
-          'facility_id', facility_id,
-          'facility_name', facility_name,
-          'beds', beds,
-          'doctors', doctors,
-          'bed_per_doctor', bed_per_doctor,
-          'issue',
-            CASE
-              WHEN bed_per_doctor < (SELECT m_ratio - 3 * s_ratio FROM stats WHERE s_ratio > 0)
-                THEN 'Abnormally low beds-per-doctor ratio — possible understaffing'
-              WHEN bed_per_doctor > (SELECT m_ratio + 3 * s_ratio FROM stats WHERE s_ratio > 0)
-                THEN 'Abnormally high beds-per-doctor ratio — possible data error'
-              ELSE NULL
-            END,
-          'severity', 'high'
-        )))
-      )
-    )
-  )
-  FROM ratio_stats
-  WHERE bed_per_doctor IS NOT NULL
-    AND (
-      bed_per_doctor < (SELECT m_ratio - 3 * s_ratio FROM stats WHERE s_ratio > 0)
-      OR bed_per_doctor > (SELECT m_ratio + 3 * s_ratio FROM stats WHERE s_ratio > 0)
-    )
-)
-
 -- 9. Anomaly Flagging (bed count outliers)
 WHEN LOWER(parse_json(query_json):query) RLIKE 'outlier|anomal|flag|unusual'
-  AND LOWER(parse_json(query_json):query) NOT RLIKE 'abnormal|ratio'
 THEN (
   WITH cap_stats AS (
     SELECT
@@ -558,8 +498,6 @@ THEN (
       fr.state,
       fr.city,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
-      COALESCE(fr.number_doctors, 0) AS doctors,
-      fr.number_doctors IS NULL AS has_no_doctor_record,
       COALESCE(CAST(fr.no_beds AS INT), 0) AS beds,
       (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff
        WHERE ff.facility_id = fr.facility_id AND ff.fact_type = 'equipment') AS n_equip,
@@ -580,7 +518,6 @@ THEN (
           'facility_id', facility_id,
           'facility_name', facility_name,
           'state', state,
-          'doctors', doctors,
           'beds', beds,
           'equipment_count', n_equip,
           'specialty_count', n_specialties,
@@ -589,10 +526,6 @@ THEN (
             CASE
               WHEN n_equip = 0 AND n_specialties > 0 AND facility_type IN ('clinic', 'pharmacy')
                 THEN 'equipment_gap'
-              WHEN (doctors = 0 OR has_no_doctor_record = TRUE) AND (n_specialties > 0 OR n_procedures > 0)
-                THEN 'workforce_gap'
-              WHEN n_specialties > 5 AND doctors < 3 AND facility_type IN ('clinic', 'pharmacy')
-                THEN 'training_gap'
               WHEN n_equip > 0 AND n_specialties = 0 AND n_procedures = 0
                 THEN 'service_gap'
               WHEN facility_type = 'clinic' AND (n_specialties > 3 OR n_procedures > 5)
@@ -603,10 +536,8 @@ THEN (
             CASE
               WHEN n_equip = 0 AND n_specialties > 0 AND facility_type IN ('clinic', 'pharmacy')
                 THEN 'Clinic/pharmacy claims specialty services but has no equipment records — verify inventory'
-              WHEN (doctors = 0 OR has_no_doctor_record = TRUE) AND (n_specialties > 0 OR n_procedures > 0)
-                THEN 'Specialties/procedures claimed but no doctors on record — workforce verification needed'
-              WHEN n_specialties > 5 AND doctors < 3 AND facility_type IN ('clinic', 'pharmacy')
-                THEN 'Many specialties claimed at a small facility with very few doctors — training capacity unlikely'
+              WHEN n_specialties > 0 OR n_procedures > 0
+                THEN 'Specialties/procedures claimed — workforce verification recommended'
               WHEN n_equip > 0 AND n_specialties = 0 AND n_procedures = 0
                 THEN 'Equipment present but no services documented — possible capability gap'
               WHEN facility_type = 'clinic' AND (n_specialties > 3 OR n_procedures > 5)
@@ -615,8 +546,6 @@ THEN (
             END,
           'severity',
             CASE
-              WHEN (doctors = 0 OR has_no_doctor_record = TRUE) AND (n_specialties > 0 OR n_procedures > 0)
-                THEN 'high'
               WHEN n_equip = 0 AND n_specialties > 0 AND facility_type IN ('clinic', 'pharmacy')
                 THEN 'high'
               WHEN facility_type = 'clinic' AND (n_specialties > 3 OR n_procedures > 5)
@@ -630,8 +559,7 @@ THEN (
   FROM gap_analysis
   WHERE
     (n_equip = 0 AND n_specialties > 0 AND facility_type IN ('clinic', 'pharmacy'))
-    OR ((doctors = 0 OR has_no_doctor_record = TRUE) AND (n_specialties > 0 OR n_procedures > 0))
-    OR (n_specialties > 5 AND doctors < 3 AND facility_type IN ('clinic', 'pharmacy'))
+    OR (n_specialties > 0 OR n_procedures > 0)
     OR (n_equip > 0 AND n_specialties = 0 AND n_procedures = 0)
     OR (facility_type = 'clinic' AND (n_specialties > 3 OR n_procedures > 5))
 )
@@ -751,57 +679,6 @@ THEN (
   WHERE (description IS NOT NULL AND LENGTH(description) > 200 AND n_facts = 0)
      OR n_facts = 0
      OR (n_services = 0 AND n_facts > 0)
-)
-
--- 17. Visiting vs Permanent Staff (facility_type vs staffing patterns)
-WHEN LOWER(parse_json(query_json):query) RLIKE 'visiting|permanent staff|staff type|part time|full time|staffing pattern'
-THEN (
-  SELECT to_json(
-    map_from_arrays(
-      array('query', 'findings'),
-      array(
-        parse_json(query_json):query,
-        to_json(array_agg(named_struct(
-          'type', 'visiting_vs_permanent',
-          'facility_id', fr.facility_id,
-          'facility_name', fr.facility_name,
-          'facility_type', COALESCE(fr.facility_type, 'unknown'),
-          'operator_type', COALESCE(fr.operator_type, 'unknown'),
-          'number_doctors', COALESCE(fr.number_doctors, 0),
-          'no_beds', COALESCE(CAST(fr.no_beds AS INT), 0),
-          'staffing_pattern',
-            CASE
-              WHEN fr.facility_type = 'clinic' AND COALESCE(fr.number_doctors, 0) = 0
-                THEN 'likely_visiting'
-              WHEN fr.facility_type = 'clinic' AND COALESCE(fr.number_doctors, 0) BETWEEN 1 AND 2
-                THEN 'minimal_permanent'
-              WHEN fr.facility_type = 'hospital' AND COALESCE(fr.number_doctors, 0) >= 5
-                THEN 'permanent_staff'
-              WHEN fr.facility_type = 'hospital' AND COALESCE(fr.number_doctors, 0) BETWEEN 1 AND 4
-                THEN 'minimal_permanent_may_use_visiting'
-              ELSE 'unknown'
-            END,
-          'issue',
-            CASE
-              WHEN fr.facility_type = 'clinic' AND COALESCE(fr.number_doctors, 0) = 0
-                THEN 'Clinic with no doctors on record — likely relies on visiting specialists'
-              WHEN fr.facility_type = 'hospital' AND COALESCE(fr.number_doctors, 0) BETWEEN 1 AND 4
-                THEN 'Hospital with very few doctors — possible visiting staff model'
-              ELSE NULL
-            END,
-          'severity',
-            CASE
-              WHEN fr.facility_type = 'clinic' AND COALESCE(fr.number_doctors, 0) = 0 THEN 'medium'
-              WHEN fr.facility_type = 'hospital' AND COALESCE(fr.number_doctors, 0) BETWEEN 1 AND 4 THEN 'medium'
-              ELSE 'low'
-            END
-        )))
-      )
-    )
-  )
-  FROM med_atlas_ai.default.facility_records fr
-  WHERE fr.organization_type = 'facility'
-    AND fr.facility_type IN ('clinic', 'hospital')
 )
 
 -- 18. Data Staleness (updated_at age scoring)

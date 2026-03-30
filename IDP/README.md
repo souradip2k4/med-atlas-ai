@@ -214,7 +214,6 @@ All scalar fields are consolidated into a single rich paragraph. The summary is 
 | `facility_type` | Type label (e.g., `"clinic"`, `"hospital"`) |
 | `city`, `state`, `country` | Geographic location via `loc_str` |
 | `address_line1`, `address_line2`, `address_line3` | `"It is physically located at [full address]."` — only non-null lines are concatenated |
-| `number_doctors` | `"It has X medical doctors on staff."` |
 | `capacity` | `"an inpatient capacity of X beds."` |
 | `year_established` | `"Established in YYYY."` |
 | `accepts_volunteers` | `"It actively accepts clinical volunteers."` (only if `True`) |
@@ -226,7 +225,7 @@ All scalar fields are consolidated into a single rich paragraph. The summary is 
 ```
 "WAAF is a privately operated clinic in Takoradi, Western Region, Ghana.
  It is physically located at 123 Main Street, Suite 4B.
- It has 12 medical doctors on staff and an inpatient capacity of 40 beds.
+ It has an inpatient capacity of 40 beds.
  Established in 2005. It actively accepts clinical volunteers.
  Its mission statement is: To provide quality healthcare to the people of Western Ghana."
 ```
@@ -242,16 +241,16 @@ This stage builds a multi-dimensional analytics table using PySpark aggregations
 
 **Six aggregation dimensions:**
 
-| # | insight_category | insight_value | What is grouped | facility_count | total_beds | total_doctors |
-|---|-----------------|---------------|-----------------|----------------|------------|---------------|
-| 1 | `overview` | `all_facilities` | All facilities in a region | ✅ countDistinct | ✅ SUM(capacity) | ✅ SUM(number_doctors) |
-| 2 | `operator` | e.g. `"public"`, `"private"` | Facilities by operator_type | ✅ countDistinct | ✅ SUM(capacity) | ✅ SUM(number_doctors) |
-| 3 | `specialty` | e.g. `"cardiology"` | Facilities by exploded specialty | ✅ countDistinct | NULL* | NULL* |
-| 4 | `procedure` | e.g. `"openHeartSurgery"` | Facilities by exploded procedure | ✅ countDistinct | NULL* | NULL* |
-| 5 | `equipment` | e.g. `"mriMachine"` | Facilities by exploded equipment | ✅ countDistinct | NULL* | NULL* |
-| 6 | `capability` | e.g. `"24-hour services"` | Facilities by exploded capability | ✅ countDistinct | NULL* | NULL* |
+| # | insight_category | insight_value | What is grouped | facility_count | total_beds |
+|---|-----------------|---------------|-----------------|----------------|------------|
+| 1 | `overview` | `all_facilities` | All facilities in a region | ✅ countDistinct | ✅ SUM(capacity) |
+| 2 | `operator` | e.g. `"public"`, `"private"` | Facilities by operator_type | ✅ countDistinct | ✅ SUM(capacity) |
+| 3 | `specialty` | e.g. `"cardiology"` | Facilities by exploded specialty | ✅ countDistinct | NULL* |
+| 4 | `procedure` | e.g. `"openHeartSurgery"` | Facilities by exploded procedure | ✅ countDistinct | NULL* |
+| 5 | `equipment` | e.g. `"mriMachine"` | Facilities by exploded equipment | ✅ countDistinct | NULL* |
+| 6 | `capability` | e.g. `"24-hour services"` | Facilities by exploded capability | ✅ countDistinct | NULL* |
 
-*\*`total_beds` and `total_doctors` are explicitly set to `NULL` for array-based dimensions to prevent statistical overcounting. A hospital with 50 doctors and 3 specialties would otherwise contribute 150 phantom doctors to the totals.*
+*\*`total_beds` is explicitly set to `NULL` for array-based dimensions to prevent statistical overcounting. A hospital with 50 beds and 3 specialties would otherwise contribute 150 phantom beds to the totals.*
 
 **Array Explosion Logic:**
 For array columns (specialties, procedures, equipment, capabilities), PySpark's `explode_outer()` is used to create one row per array item, followed by `groupBy(country, state, city, item)` and `countDistinct(facility_id)`. This guarantees that each facility is counted exactly once per specialty/procedure/equipment/capability even if duplicate entries exist in the source data.
@@ -286,7 +285,6 @@ The single source of truth for all facility data. Each row represents one health
 | `officialWebsite` | String | Yes | Official website URL |
 | `year_established` | Integer | Yes | Year the facility was established |
 | `accepts_volunteers` | Boolean | Yes | Whether the facility accepts clinical volunteers |
-| `number_doctors` | Integer | Yes | Number of medical doctors on staff |
 | `capacity` | Integer | Yes | Inpatient bed capacity |
 | `description` | String | Yes | Facility description text |
 | `mission_statement` | String | Yes | Organisation mission statement |
@@ -327,7 +325,6 @@ A pre-aggregated multi-dimensional analytics table designed for precise quantita
 | `insight_value` | String | No | Dimension value (e.g., `"all_facilities"`, `"cardiology"`, `"public"`, `"mriMachine"`) |
 | `facility_count` | Integer | Yes | Number of distinct facilities matching this dimension |
 | `total_beds` | Integer | Yes | Sum of bed capacity (only for `overview` and `operator` categories; NULL otherwise) |
-| `total_doctors` | Integer | Yes | Sum of doctors (only for `overview` and `operator` categories; NULL otherwise) |
 | `contributing_facility_ids` | Array[String] | Yes | List of facility_ids contributing to this aggregate |
 
 **Example SQL queries this table enables:**
@@ -342,7 +339,7 @@ WHERE state = 'Western Region' AND insight_category = 'procedure'
   AND insight_value = 'bloodTransfusion';
 
 -- "Compare public vs private hospital capacity in Kumasi"
-SELECT insight_value, facility_count, total_beds, total_doctors
+SELECT insight_value, facility_count, total_beds
 FROM regional_insights
 WHERE city = 'Kumasi' AND insight_category = 'operator';
 ```
@@ -408,7 +405,7 @@ The pipeline is **idempotent** — running it multiple times will only process n
 | **No "Unknown" or "null" in fact_text** | If data is missing, the row is silently skipped. This prevents the Vector DB from returning false-positive matches on the word "unknown". |
 | **Geographic context in every fact_text** | City, state, and country are embedded directly in the sentence (e.g., `"in Accra, Greater Accra Region, Ghana"`). This enables geographic similarity matching without structured filters. |
 | **regional_insights uses Text-to-SQL, not RAG** | Vector Search is mathematically unreliable for counting, ranking, and aggregation. Text-to-SQL gives exact, provably correct quantitative answers. |
-| **Overcounting prevention** | `total_beds` and `total_doctors` are NULL for array-based insight categories (specialty, procedure, equipment, capability) to prevent a single hospital's metrics from being multiplied across its specialties. |
+| **Overcounting prevention** | `total_beds` is NULL for array-based insight categories (specialty, procedure, equipment, capability) to prevent a single hospital's metrics from being multiplied across its specialties. |
 | **facility_id = CSV unique_id** | Eliminates the need for a separate `source_row_id` column. Enables idempotent checkpointing by comparing CSV row IDs against existing `facility_id`s. |
 | **Deterministic Ghana region inference** | A 80+ entry city→region lookup table in `merger.py` ensures consistent region assignment even when the LLM fails to extract the state/region. |
 | **One LLM call per row, no cross-row batching** | Prevents cross-contamination where the LLM conflates data from different facilities within a single prompt. |

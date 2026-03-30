@@ -401,13 +401,13 @@ If the query involves ANY of:
 
 Then follow this 3-step reasoning protocol:
   1. Use genie_chat_tool to fetch the raw facility profile:
-     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, number_doctors
+     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity
      → Filter to the relevant facilities (e.g., clinics, pharmacies, dentists)
   2. Use vector_search_tool with fact_type=["specialty", "equipment", "procedure", "summary", "capability"] to retrieve the detailed fact_text for those facilities.
   3. Apply YOUR OWN medical expertise:
      → Is this facility_type capable of these procedures given real-world medical standards?
      → Does this equipment require specialist support that is not present?
-     → Is this subspecialty realistic given the facility's size/capacity/doctor count?
+     → Is this subspecialty realistic given the facility's size and capacity?
      → DO NOT use simple keyword matching — reason about plausibility holistically.
   4. Report findings with: facility name, facility type, the suspicious claim, your
      medical reasoning, and severity (high/medium/low).

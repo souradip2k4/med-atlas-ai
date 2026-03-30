@@ -158,14 +158,6 @@ class Facility(BaseOrganization):
     area: Optional[int] = Field(
         None, description="Total floor area of the facility in square meters"
     )
-    numberDoctors: Optional[int] = Field(
-        None,
-        description=(
-            "Total number of medical doctors. Scan ALL text fields — especially "
-            "capability, equipment, and procedure — for phrases like '5 doctors', "
-            "'12 physicians', 'medical staff of 8'. Extract ONLY the integer."
-        ),
-    )
     noBeds: Optional[int] = Field(
         None,
         description=(

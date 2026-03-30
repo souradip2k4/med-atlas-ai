@@ -76,24 +76,6 @@ def _extract_bed_count(arrays: list[Optional[List[str]]]) -> Optional[int]:
     return None
 
 
-def _extract_doctor_count(arrays: list[Optional[List[str]]]) -> Optional[int]:
-    """Scan capability/equipment strings for doctor counts.
-
-    Fallback when ``number_doctors`` was not extracted as a structured integer.
-    """
-    patterns = [
-        r'(\d+)\s*(?:medical\s*)?doctors?\b',
-        r'(\d+)\s*physicians?\b',
-    ]
-    for arr in arrays:
-        if not arr:
-            continue
-        for item in arr:
-            for pat in patterns:
-                m = re.search(pat, item, re.IGNORECASE)
-                if m:
-                    return int(m.group(1))
-    return None
 
 
 # ── Ghana city → region lookup (deterministic fallback when LLM cannot infer) ──
@@ -470,22 +452,15 @@ def merge_extraction_results(
         fac.acceptsVolunteers if fac else None,
         _try_bool(row.get("acceptsvolunteers")),
     )
-    number_doctors = _first_non_null(
-        getattr(facts, "numberDoctors", None) if facts else None,  # Step 2 LLM (primary)
-        fac.numberDoctors if fac else None,                         # Step 4 legacy (now None)
-        _try_int(row.get("numberdoctors")),
-    )
     no_beds = _first_non_null(
         getattr(facts, "noBeds", None) if facts else None,          # Step 2 LLM (primary)
         fac.noBeds if fac else None,                                 # Step 4 legacy (now None)
         _try_int(row.get("capacity")),  # CSV column still named 'capacity'
     )
 
-    # ── Regex fallback: recover bed/doctor counts from free-text ──
+    # ── Regex fallback: recover bed counts from free-text ──
     if no_beds is None:
         no_beds = _extract_bed_count([capabilities, equipment])
-    if number_doctors is None:
-        number_doctors = _extract_doctor_count([capabilities, equipment])
 
     # ── Text & Affiliations ──
     desc = _first_non_null(
@@ -536,8 +511,7 @@ def merge_extraction_results(
         "websites": websites or None,
         "officialWebsite": official_website,
         "year_established": _try_int(year_established),
-        "accepts_volunteers": _try_bool(accepts_volunteers),
-        "number_doctors": _try_int(number_doctors),
+        "accepts_volunteers": accepts_volunteers,
         "no_beds": _try_int(no_beds),
         "description": desc,
         "mission_statement": mission_statement,
