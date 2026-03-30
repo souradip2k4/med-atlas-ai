@@ -43,6 +43,14 @@ class InvokeRequest(BaseModel):
 
 class InvokeResponse(BaseModel):
     output: list[dict[str, Any]]
+    citations: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Citation data keyed by agentic step. Contains:\n"
+            "  steps[]    — one entry per tool call, ordered by execution\n"
+            "  summary    — aggregate stats (facilities referenced, tables used)"
+        ),
+    )
     agent: str = "MedAtlasAgent"
     endpoint: str = "fastapi"
 
@@ -198,11 +206,11 @@ def invoke(request: InvokeRequest):
             context=ChatContext(user_id=request.user_id or "api-user"),
         )
 
-        resp = AGENT.predict(req)
+        result = AGENT.predict_with_citations(req)
 
-        output_items = [_format_output_item(out) for out in resp.output]
+        output_items = [_format_output_item(out) for out in result.response.output]
 
-        return InvokeResponse(output=output_items)
+        return InvokeResponse(output=output_items, citations=result.citations)
 
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
