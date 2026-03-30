@@ -128,12 +128,8 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     
     # 3. Add Hard Metrics
     no_beds = facility_record.get("no_beds")
-    number_doctors = facility_record.get("number_doctors")
-    if number_doctors or no_beds:
-        metrics = []
-        if number_doctors: metrics.append(f"{number_doctors} medical doctors on staff")
-        if no_beds: metrics.append(f"{no_beds} inpatient beds")
-        summary_parts.append(f"It has {' and '.join(metrics)}.")
+    if no_beds:
+        summary_parts.append(f"It has an inpatient capacity of {no_beds} beds.")
         
     # 4. History and Operations
     year_established = facility_record.get("year_established")
