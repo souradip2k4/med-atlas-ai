@@ -159,38 +159,42 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     Uses the analyze_medical_query UC function on facility_records and
     facility_facts tables to detect data quality issues and anomalies.
 
-    Detects 15 anomaly types (statistical/mathematical — NOT medical domain reasoning):
+    Returns data for 10 analysis types:
       1. contradictory_signals    — conflicting ICU/inpatient statements across facts
-      2. ngo_classification       — direct_operator / supporter / none
+      2. ngo_raw_data             — raw NGO records (name + affiliation_types) for LLM to classify
       3. reliability_score        — 0-100 data quality score based on fact density
-      4. unmet_needs              — service gaps by region
-      5. duplicate_facility       — same name prefix in multiple records
-      6. anomaly_flagging         — outlier bed/doctor counts (3 std devs)
-      7. abnormal_ratio           — implausible bed/OR/doctor ratios
-      8. feature_mismatch         — procedure COUNT vs equipment COUNT (numeric)
-      9. oversupply_scarcity      — procedure frequency vs facility count
-     10. ngo_overlap              — overlapping NGO presence in same region
-     11. problem_type             — classify gaps as equipment/training/workforce
-     12. specialist_distribution  — specialty → region mapping
-     13. web_capability_mismatch  — description length vs fact count discrepancy
-     14. visiting_vs_permanent    — facility_type vs doctor count patterns
-     15. data_staleness           — outdated records (updated_at age scoring)
+      4. regional_coverage        — per-region service coverage arrays for LLM gap analysis
+      5. duplicate_facility       — exact same facility name occurring multiple times
+      6. anomaly_flagging         — outlier bed counts (3 std devs)
+      7. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
+      8. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
+      9. facility_profile_counts  — raw per-facility counts for LLM gap classification
+     10. data_staleness           — outdated records (updated_at age scoring)
 
-    NOTE: Over-claiming, equipment-procedure mismatch, and subspecialty-infrastructure
-    mismatch are NOT handled here — those require medical domain reasoning and are
-    handled directly by the LLM using genie_chat_tool + vector_search_tool.
+    IMPORTANT — For branches that return raw data (types 2, 4, 7, 8, 9), YOU must:
+      • Read the 'note' field in each finding and apply medical/domain reasoning
+      • Classify NGO levels, identify service gaps, assess overlap, or classify gap types
+      • Evaluate if procedure-to-equipment ratios are medically implausible
+      • Do NOT just echo the raw data — synthesize a meaningful analysis
+
+    Routed to genie_chat_tool instead (NOT this tool):
+      - Oversupply/scarcity queries → genie_chat_tool (e.g., "how many facilities offer X?")
+      - Specialist distribution    → genie_chat_tool (queries regional_insights table directly)
+      - Web/description quality    → genie_chat_tool (e.g., "which facilities have websites?")
 
     Trigger keywords: "anomal", "inconsisten", "contradict", "reliab", "score",
     "quality", "ngo", "classify", "gap", "unmet", "outlier", "flag",
     "duplicate", "abnormal", "red flag", "problem type", "workforce",
-    "specialist", "visiting staff", "permanent staff", "oversupply",
-    "scarcity", "overlapping", "staleness", "stale", "corrobor".
+    "staffing", "overlapping", "staleness", "stale", "corrobor",
+    "mismatch", "feature mismatch", "procedure count", "equipment count".
+
+    NOT for: oversupply, scarcity, specialist distribution, web presence → use genie_chat_tool.
 
     Args:
         query:      Analysis question (e.g., "detect anomalies", "score reliability")
         facility_id: Optional. Restrict analysis to one facility.
 
-    Returns: Structured JSON with findings, severity, and recommendations.
+    Returns: Structured JSON with findings + optional 'note' fields for LLM reasoning.
     """
     from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
 
@@ -348,7 +352,9 @@ IS_QUANTITATIVE = True if ANY of these keywords appear:
   "how many", "count", "total", "average", "sum", "most", "least",
   "top N", "region", "district", "ownership", "beds", "staff",
   "ratio", "percentage", "ranking", "compar", "distribution",
-  "how many hospitals in [region]", "number of", "how many facilities"
+  "how many hospitals in [region]", "number of", "how many facilities",
+  "oversupply", "scarcity", "specialist", "specialist distribution",
+  "web presence", "website", "online presence"
 
 IS_SEMANTIC = True if ANY of these keywords appear:
   "similar", "like", "service", "equipment", "provides", "specialty",
@@ -361,8 +367,8 @@ IS_ANALYTIC = True if ANY of these keywords appear:
   "anomal", "inconsisten", "contradict", "reliab", "score", "quality",
   "ngo", "classify", "classif", "gap", "unmet", "outlier", "flag",
   "duplicate", "abnormal", "red flag", "problem type", "workforce",
-  "specialist", "specialist workforce", "visiting staff", "permanent staff",
-  "oversupply", "scarcity", "correlat", "overlapping", "staleness"
+  "staffing", "correlat", "overlapping", "staleness", "mismatch",
+  "feature mismatch", "procedure count", "equipment count"
 
 ### Step 2 — Route accordingly:
 
@@ -401,7 +407,7 @@ If the query involves ANY of:
 
 Then follow this 3-step reasoning protocol:
   1. Use genie_chat_tool to fetch the raw facility profile:
-     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity
+     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, social_links
      → Filter to the relevant facilities (e.g., clinics, pharmacies, dentists)
   2. Use vector_search_tool with fact_type=["specialty", "equipment", "procedure", "summary", "capability"] to retrieve the detailed fact_text for those facilities.
   3. Apply YOUR OWN medical expertise:
@@ -411,6 +417,15 @@ Then follow this 3-step reasoning protocol:
      → DO NOT use simple keyword matching — reason about plausibility holistically.
   4. Report findings with: facility name, facility type, the suspicious claim, your
      medical reasoning, and severity (high/medium/low).
+
+### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
+
+When `medical_agent_tool` returns raw structural data, you MUST classify it based on its `type`:
+  • For `ngo_raw_data`: Use the facility name and `affiliation_types` to classify it as a "direct_operator" (e.g., Red Cross, Catholic Mission) or a "supporter" (e.g., faith-tradition without a specific operator name).
+  • For `regional_coverage` (Unmet Needs): Use your medical expertise to identify which critical services (e.g., dialysis, trauma, neonatal ICU, MRI) are missing given the provided state arrays.
+  • For `feature_mismatch_raw`: Evaluate if the `ratio` of procedures to equipment is medically implausible for the provided `facility_type`.
+  • For `facility_profile_counts` (Problem Type): Classify the gap as "equipment_gap" (has specialties but 0 equipment), "service_gap" (has equipment but 0 services), or "overclaim_gap" (clinic claiming many specialties).
+  • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
 
 ### Step 3 — Multi-tool orchestration:
 

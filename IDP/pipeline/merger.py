@@ -487,6 +487,12 @@ def merge_extraction_results(
         row.get("classification")
     )
 
+    social_dict = {}
+    if facebook_link := row.get("facebooklink"): social_dict["facebookLink"] = facebook_link
+    if twitter_link := row.get("twitterlink"): social_dict["twitterLink"] = twitter_link
+    if linkedin_link := row.get("linkedinlink"): social_dict["linkedinLink"] = linkedin_link
+    if instagram_link := row.get("instagramlink"): social_dict["instagramLink"] = instagram_link
+
     # ── Removed Confidence & Suspicious logic per user request ──
 
     return {
@@ -509,6 +515,7 @@ def merge_extraction_results(
         "phone_numbers": phone_numbers or None,
         "email": email,
         "websites": websites or None,
+        "social_links": social_dict or None,
         "officialWebsite": official_website,
         "year_established": _try_int(year_established),
         "accepts_volunteers": accepts_volunteers,
