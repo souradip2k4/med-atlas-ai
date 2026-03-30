@@ -16,6 +16,7 @@ from pyspark.sql.types import (
     IntegerType,
     BooleanType,
     ArrayType,
+    MapType,
     TimestampType,
     DoubleType,
 )
@@ -54,6 +55,7 @@ FACILITY_RECORDS_SCHEMA = StructType([
     StructField("phone_numbers", ArrayType(StringType()), nullable=True),
     StructField("email", StringType(), nullable=True),
     StructField("websites", ArrayType(StringType()), nullable=True),
+    StructField("social_links", MapType(StringType(), StringType()), nullable=True),
     StructField("officialWebsite", StringType(), nullable=True),
 
     # ── Meta ──

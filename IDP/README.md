@@ -282,6 +282,7 @@ The single source of truth for all facility data. Each row represents one health
 | `phone_numbers` | Array[String] | Yes | Contact phone numbers |
 | `email` | String | Yes | Primary email address |
 | `websites` | Array[String] | Yes | Associated websites |
+| `social_links` | Map[String, String] | Yes | Dictionary mapping platforms to URLs (e.g., `{"facebookLink": "url"}`) |
 | `officialWebsite` | String | Yes | Official website URL |
 | `year_established` | Integer | Yes | Year the facility was established |
 | `accepts_volunteers` | Boolean | Yes | Whether the facility accepts clinical volunteers |
