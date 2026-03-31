@@ -127,9 +127,9 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
         summary_parts.append(f"It is physically located at {full_street_address}.")
     
     # 3. Add Hard Metrics
-    no_beds = facility_record.get("no_beds")
-    if no_beds:
-        summary_parts.append(f"It has an inpatient capacity of {no_beds} beds.")
+    capacity = facility_record.get("capacity")
+    if capacity:
+        summary_parts.append(f"It has an inpatient capacity of {capacity} beds.")
         
     # 4. History and Operations
     year_established = facility_record.get("year_established")

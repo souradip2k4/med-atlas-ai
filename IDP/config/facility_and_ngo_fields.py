@@ -158,7 +158,7 @@ class Facility(BaseOrganization):
     area: Optional[int] = Field(
         None, description="Total floor area of the facility in square meters"
     )
-    noBeds: Optional[int] = Field(
+    capacity: Optional[int] = Field(
         None,
         description=(
             "Total inpatient bed count. Scan ALL text fields — especially equipment , equipment, and procedure"

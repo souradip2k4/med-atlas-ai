@@ -66,7 +66,7 @@ DESCRIPTION GENERATION
 - Base it only on the provided content. If no meaningful description can be generated, set it to null.
 - Do NOT duplicate information from the fact arrays — the description should be a human-readable overview.
 
-NUMERIC EXTRACTION (noBeds, noDocors)
+NUMERIC EXTRACTION (capacity, noDocors)
 - Scan ALL input fields — especially capability, equipment, description, and procedure — for any mention of:
   - Bed counts: phrases like "300 beds", "bed capacity of 39", "100-bed facility", "neonatal beds", "wards with X beds"
   - Doctor/staff counts: phrases like "10 doctors on staff", "5 physicians", "team of 3 medical officers", "staff of 20 clinicians"
@@ -99,7 +99,7 @@ EXAMPLE OUTPUT
     "Offers inpatient and outpatient services",
     "Has 15 neonatal specialists on staff"
   ],
-  "noBeds": 200,
+  "capacity": 200,
   "noDocors": 45,
   "description": "A 200-bed tertiary hospital offering comprehensive trauma care, cardiac surgery, and oncology services. Established in 1985, it serves as the primary referral center for the Western Region."
 ```
@@ -136,7 +136,7 @@ class FacilityFacts(BaseModel):
             "Base it only on the provided content. Do NOT duplicate information from the fact arrays."
         ),
     )
-    noBeds: Optional[int] = Field(
+    capacity: Optional[int] = Field(
         None,
         description=(
             "Total inpatient bed count. Scan ALL text fields (capability, equipment, description, procedure) for "

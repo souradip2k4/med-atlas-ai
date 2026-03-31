@@ -204,7 +204,7 @@ def _compute_regional_insights(db) -> None:
     # Base select needed for all aggregations
     base_df = records_df.select(
         "facility_id", "country", "state", "city", 
-        "no_beds", "no_doctors", "operator_type",
+        "capacity", "no_doctors", "operator_type",
         "specialties", "procedures", "equipment", "capabilities"
     )
     
@@ -213,7 +213,7 @@ def _compute_regional_insights(db) -> None:
     # 1. OVERVIEW (Totals per region)
     overview_df = base_df.groupBy("country", "state", "city").agg(
         F.countDistinct("facility_id").alias("facility_count"),
-        F.sum("no_beds").alias("total_beds"),
+        F.sum("capacity").alias("total_capacity"),
         F.sum("no_doctors").alias("total_doctors"),
         F.collect_set("facility_id").alias("contributing_facility_ids")
     )
@@ -221,14 +221,14 @@ def _compute_regional_insights(db) -> None:
         "country", "state", "city",
         F.lit("overview").alias("insight_category"),
         F.lit("all_facilities").alias("insight_value"),
-        "facility_count", "total_beds", "total_doctors", "contributing_facility_ids"
+        "facility_count", "total_capacity", "total_doctors", "contributing_facility_ids"
     )
     insights_dfs.append(overview_df)
 
     # 2. OPERATOR TYPE
     operator_df = base_df.filter(F.col("operator_type").isNotNull()).groupBy("country", "state", "city", "operator_type").agg(
         F.countDistinct("facility_id").alias("facility_count"),
-        F.sum("no_beds").alias("total_beds"),
+        F.sum("capacity").alias("total_capacity"),
         F.sum("no_doctors").alias("total_doctors"),
         F.collect_set("facility_id").alias("contributing_facility_ids")
     )
@@ -236,11 +236,11 @@ def _compute_regional_insights(db) -> None:
         "country", "state", "city",
         F.lit("operator").alias("insight_category"),
         F.col("operator_type").alias("insight_value"),
-        "facility_count", "total_beds", "total_doctors", "contributing_facility_ids"
+        "facility_count", "total_capacity", "total_doctors", "contributing_facility_ids"
     )
     insights_dfs.append(operator_df)
 
-    # Helper function for array explosions (total_beds is set to NULL to prevent statistical overcounting)
+    # Helper function for array explosions (total_capacity is set to NULL to prevent statistical overcounting)
     def _explode_and_agg(column_name: str, category_name: str):
         exploded = base_df.withColumn("item", F.explode_outer(F.col(column_name))).filter(F.col("item").isNotNull())
         grouped = exploded.groupBy("country", "state", "city", "item").agg(
@@ -253,7 +253,7 @@ def _compute_regional_insights(db) -> None:
             F.lit(category_name).alias("insight_category"),
             F.col("item").alias("insight_value"),
             "facility_count",
-            F.lit(None).cast(IntegerType()).alias("total_beds"),
+            F.lit(None).cast(IntegerType()).alias("total_capacity"),
             F.lit(None).cast(IntegerType()).alias("total_doctors"),
             "contributing_facility_ids"
         )
@@ -275,7 +275,7 @@ def _compute_regional_insights(db) -> None:
     ordered = final_insights.select(
         "country", "state", "city", 
         "insight_category", "insight_value", 
-        "facility_count", "total_beds", "total_doctors",
+        "facility_count", "total_capacity", "total_doctors",
         "contributing_facility_ids"
     )
 

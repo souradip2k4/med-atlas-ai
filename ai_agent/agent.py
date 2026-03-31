@@ -81,7 +81,7 @@ def genie_chat_tool(query: str) -> str:
     structured column filtering, comparisons, distributions, bed/staff ratios.
 
     Trigger keywords: "how many", "count", "total", "average", "sum", "most",
-    "least", "top N", "region", "district", "state", "ownership", "beds",
+    "least", "top N", "region", "district", "state", "ownership", "beds", "capacity",
     "staff", "ratio", "percentage", "ranking", "compar", "distribution".
 
     NOT for: semantic similarity, free-text capability searches, facility details.
@@ -159,17 +159,23 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     Uses the analyze_medical_query UC function on facility_records and
     facility_facts tables to detect data quality issues and anomalies.
 
-    Returns data for 10 analysis types:
-      1. contradictory_signals    — conflicting ICU/inpatient statements across facts
-      2. ngo_raw_data             — raw NGO records (name + affiliation_types) for LLM to classify
-      3. reliability_score        — 0-100 data quality score based on fact density
-      4. regional_coverage        — per-region service coverage arrays for LLM gap analysis
-      5. duplicate_facility       — exact same facility name occurring multiple times
-      6. anomaly_flagging         — outlier bed counts (3 std devs)
-      7. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
-      8. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
-      9. facility_profile_counts  — raw per-facility counts for LLM gap classification
-     10. data_staleness           — outdated records (updated_at age scoring)
+    Returns data for 8 analysis types:
+      1. reliability_score        — 0-100 data quality score based on fact density
+      2. regional_coverage        — per-region service coverage arrays for LLM gap analysis
+      3. duplicate_facility       — exact same facility name occurring multiple times
+      4. anomaly_flagging         — outlier capacity/doctor counts (3 std devs)
+      5. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
+      6. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
+      7. facility_profile_counts  — raw per-facility counts for LLM gap classification
+      8. data_staleness           — outdated records (updated_at age scoring)
+
+    NOTE — For classification/breakdown queries (facility_type, operator_type, affiliation_types,
+      ngo counts, public vs private breakdown) — use genie_chat_tool instead.
+      These are enum fields; Genie handles them with simple GROUP BY aggregations.
+
+    NOTE — For contradiction detection, use vector_search_tool instead:
+      Contradictions/inconsistencies are handled dynamically via semantic search,
+      not by this tool. Route 'contradict', 'inconsistent' queries to vector_search_tool.
 
     IMPORTANT — For branches that return raw data (types 2, 4, 7, 8, 9), YOU must:
       • Read the 'note' field in each finding and apply medical/domain reasoning
@@ -350,26 +356,29 @@ IS_GEOSPATIAL = True if ANY of these keywords appear:
 
 IS_QUANTITATIVE = True if ANY of these keywords appear:
   "how many", "count", "total", "average", "sum", "most", "least",
-  "top N", "region", "district", "ownership", "beds", "staff",
+  "top N", "region", "district", "ownership", "beds", "capacity", "staff",
   "ratio", "percentage", "ranking", "compar", "distribution",
   "how many hospitals in [region]", "number of", "how many facilities",
   "oversupply", "scarcity", "specialist", "specialist distribution",
   "web presence", "website", "online presence",
-  "doctors", "doctor count", "total doctors", "number of doctors"
+  "doctors", "doctor count", "total doctors", "number of doctors",
+  "ngo", "classification", "classify", "categorize", "breakdown",
+  "affiliation", "facility type", "operator type", "organization type"
 
 IS_SEMANTIC = True if ANY of these keywords appear:
   "similar", "like", "service", "equipment", "provides", "specialty",
   "has", "can provide", "offers", "what does", "which facilities provide",
   "capability", "capabilities", "similar to", "what services", "procedures",
   "over-claim", "implausib", "subspecialty", "equipment mismatch",
-  "corrobor", "camp", "outreach", "medical camp", "referral", "bundle"
+  "corrobor", "camp", "outreach", "medical camp", "referral", "bundle",
+  "contradict", "inconsisten", "conflicting", "conflict"
 
 IS_ANALYTIC = True if ANY of these keywords appear:
-  "anomal", "inconsisten", "contradict", "reliab", "score", "quality",
-  "ngo", "classify", "classif", "gap", "unmet", "outlier", "flag",
+  "anomal", "reliab", "score", "quality",
+  "gap", "unmet", "outlier", "flag",
   "duplicate", "abnormal", "red flag", "problem type", "workforce",
   "staffing", "correlat", "overlapping", "staleness", "mismatch",
-  "feature mismatch", "procedure count", "equipment count"
+  "feature mismatch", "procedure count", "equipment count", "signal"
 
 ### Step 2 — Route accordingly:
 
@@ -419,13 +428,66 @@ Then follow this 3-step reasoning protocol:
   4. Report findings with: facility name, facility type, the suspicious claim, your
      medical reasoning, and severity (high/medium/low).
 
+### Step 2.5 — Contradiction Detection Protocol (applies when query involves contradictions or inconsistencies):
+
+If the user asks about **conflicting claims**, **contradictory information**, or **inconsistent data** for a facility:
+  1. Use `vector_search_tool` with the topic they mention (e.g., `query="ICU surgery contradictions"`) to semantically retrieve all related facts from `facility_facts`
+  2. **Group the results** by `facility_id` (available in each Document's metadata)
+  3. For any facility with **2 or more facts** on the same topic, compare the claims:
+     → Does Fact A say it has a capability that Fact B denies?
+     → Are there mutually exclusive claims (e.g., "no surgical unit" vs "performs cardiac surgery")?
+  4. Report findings with: facility name, the conflicting fact excerpts, your medical reasoning, and severity (high/medium/low)
+  5. If no conflicts are found, say so clearly.
+
+### Step 2.5 — Reliability Scoring Protocol (applies when medical_agent_tool returns `reliability_score` findings):
+
+When `medical_agent_tool` returns `type: reliability_score` data, present each facility as a **friendly, conversational summary card**. Your goal is to make a non-technical user understand how trustworthy the information is.
+
+**Format per facility:**
+```
+### 🏥 [Facility Name] — [facility_type]
+**Overall Data Confidence:** [reliability_score]/100 ([HIGH / MEDIUM / LOW])
+
+[If deduction_reasons is NOT empty:]
+Here is what we could not fully confirm about this facility:
+• [deduction_reason 1 — use as-is, it is already in plain language]
+• [deduction_reason 2 ...]
+
+[If deduction_reasons IS empty OR data_gaps is 0:]
+✅ This facility has a well-documented profile — all key information is available.
+```
+
+**Strict language rules:**
+  • NEVER mention: NULL, fields, penalties, scores, databases, SQL, or any technical term
+  • NEVER say "bed capacity field is null" — say "we don't know how many beds this facility has"
+  • NEVER present missing data as zero — say "this information is not available"
+  • Use the `deduction_reasons` list exactly as written — they are already user-friendly
+  • If `data_gaps > 3`, add a note: *"This profile is incomplete — treat its information with caution"*
+  • If `data_gaps = 0`, affirm that the profile is complete and trustworthy
+
+**After all facility cards:** Write a 2-sentence plain-English summary of overall data quality across all facilities (e.g., "Most facilities have partial profiles. Key gaps are around staffing numbers and medical equipment records.").
+
 ### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
 
 When `medical_agent_tool` returns raw structural data, you MUST classify it based on its `type`:
-  • For `ngo_raw_data`: Use the facility name and `affiliation_types` to classify it as a "direct_operator" (e.g., Red Cross, Catholic Mission) or a "supporter" (e.g., faith-tradition without a specific operator name).
-  • For `regional_coverage` (Unmet Needs): Use your medical expertise to identify which critical services (e.g., dialysis, trauma, neonatal ICU, MRI) are missing given the provided state arrays.
-  • For `feature_mismatch_raw`: Evaluate if the `ratio` of procedures to equipment is medically implausible for the provided `facility_type`.
-  • For `facility_profile_counts` (Problem Type): Classify the gap as "equipment_gap" (has specialties but 0 equipment), "service_gap" (has equipment but 0 services), or "overclaim_gap" (clinic claiming many specialties).
+  • For `anomaly_flagging` (Outlier Detection):
+      1. **ALWAYS start** by reading `data_coverage_summary`. Before listing any outliers, tell the user honestly how much data was available. Example: *"Please note: bed count information is only available for 18% of facilities in our dataset — the remaining 82% could not be assessed for this check."*
+      2. For each flagged facility, present the `reason` field directly — it is already written in plain language. Do NOT add statistical jargon (no "standard deviations", no "sigma", no "mean ± std").
+      3. If `findings` is empty (`[]`), tell the user: *"No unusual values were found among the facilities where bed and doctor data is available. However, this could not be checked for the majority of facilities due to missing data."*
+      4. NEVER present the raw numbers as proof of wrongdoing — frame it as *"this may need verification"* not *"this is wrong"*.
+  • For `regional_coverage` (Unmet Needs):
+      - `specialties_missing` is a **pre-computed, definitive SQL list** — report every specialty in it as a **confirmed gap** for that region (these exist elsewhere in the dataset but not here).
+      - For `procedures_present` and `equipment_present` (free-text): apply your medical domain knowledge to identify what services or equipment a region of that size and facility count would typically need but appears to lack. These are NOT pre-computed gaps — they require your reasoning.
+  • For `feature_mismatch_raw` (Procedure/Equipment Mismatch):
+      1. **ALWAYS start** by reading `data_coverage_summary`. Tell the user how many facilities are missing equipment data before listing any findings.
+      2. Group your findings by `flag_type`:
+         - **`missing_equipment`:** Explain these are *unverifiable* (they claim procedures but equipment data is missing). Do NOT call these anomalies or overclaims.
+         - **`implausible_ratio`:** Use your medical expertise to evaluate if the ratio of procedures to equipment is medically implausible for the `facility_type`. (e.g., A clinic claiming 15 procedures with 1 piece of equipment may be an overclaim).
+  • For `facility_profile_counts` (Problem Type):
+      1. **ALWAYS start** by using `data_coverage_summary` to state the systemic data availability (e.g. "We only have equipment data for X% of facilities").
+      2. For each facility, check the `_status` fields (`equipment_status`, `specialty_status`, `procedure_status`):
+         - If a status is **`missing_data`**: The database simply lacks records for this category. Do NOT diagnose this as a medical gap. Group these as "Facilities with Unverifiable Missing Data" and explain why they cannot be fully evaluated.
+         - If a status is **`true_zero`**: This is a confirmed absence of capability. Classify these true medical gaps as "equipment_gap" (has doctors/specialties but truly 0 equipment), "service_gap" (has equipment but truly 0 services/procedures), or "overclaim_gap" (claims many procedures but has 0 verifiable specialties).
   • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
 
 ### Step 3 — Multi-tool orchestration:

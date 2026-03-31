@@ -1,4 +1,4 @@
-country,state,city,insight_category,insight_value,facility_count,total_beds,total_doctors,contributing_facility_ids
+country,state,city,insight_category,insight_value,facility_count,total_capacity,total_doctors,contributing_facility_ids
 Ghana,null,Abura,capability,"Location: P.O.BOX 49, DHA, ABURA.",1,null,null,"[""6c1a5964-3b1e-4943-85e9-9d009689a107""]"
 Ghana,Greater Accra Region,Accra,capability,"Has specialist clinics for Obstetrics & Gynaecology, Paediatrics, ENT, Internal Medicine, Clinical Psychology, Ophthalmology, Dermatology, and Dietetics",1,null,null,"[""87c463b8-0f1e-410a-bd84-50b2ee306e4f""]"
 Ghana,Greater Accra Region,Accra,capability,Located 3 minutes' drive from Kotoka International Airport,1,null,null,"[""87c463b8-0f1e-410a-bd84-50b2ee306e4f""]"

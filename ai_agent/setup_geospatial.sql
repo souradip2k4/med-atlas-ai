@@ -13,7 +13,7 @@
 --   facility_facts:   facility_id, fact_text, fact_type
 --
 -- Args: query_json — JSON string with:
---   ref_lat        DOUBLE  — latitude of the reference location
+--   ref_lat        DOUBLE a — latitude of the reference location
 --   ref_lon        DOUBLE  — longitude of the reference location
 --   radius_km      DOUBLE  — search radius in kilometres
 --   condition      STRING  (optional) — medical condition / procedure keyword filter

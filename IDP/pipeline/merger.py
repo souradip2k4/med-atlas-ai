@@ -476,15 +476,15 @@ def merge_extraction_results(
         fac.acceptsVolunteers if fac else None,
         _try_bool(row.get("acceptsvolunteers")),
     )
-    no_beds = _first_non_null(
-        getattr(facts, "noBeds", None) if facts else None,          # Step 2 LLM (primary)
-        fac.noBeds if fac else None,                                 # Step 4 legacy (now None)
+    capacity = _first_non_null(
+        getattr(facts, "capacity", None) if facts else None,          # Step 2 LLM (primary)
+        fac.capacity if fac else None,                                 # Step 4 legacy (now None)
         _try_int(row.get("capacity")),  # CSV column still named 'capacity'
     )
 
     # ── Regex fallback: recover bed counts from free-text ──
-    if no_beds is None:
-        no_beds = _extract_bed_count([capabilities, equipment])
+    if capacity is None:
+        capacity = _extract_bed_count([capabilities, equipment])
 
     # ── Doctor count: LLM primary → CSV secondary → free-text fallback ──
     no_doctors = _first_non_null(
@@ -551,7 +551,7 @@ def merge_extraction_results(
         "officialWebsite": official_website,
         "year_established": _try_int(year_established),
         "accepts_volunteers": accepts_volunteers,
-        "no_beds": _try_int(no_beds),
+        "capacity": _try_int(capacity),
         "no_doctors": _try_int(no_doctors),
         "description": desc,
         "mission_statement": mission_statement,
