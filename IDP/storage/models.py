@@ -61,7 +61,7 @@ FACILITY_RECORDS_SCHEMA = StructType([
     # ── Meta ──
     StructField("year_established", IntegerType(), nullable=True),
     StructField("accepts_volunteers", BooleanType(), nullable=True),
-    StructField("no_beds", IntegerType(), nullable=True),
+    StructField("capacity", IntegerType(), nullable=True),
     StructField("no_doctors", IntegerType(), nullable=True),
     StructField("description", StringType(), nullable=True),
     StructField("mission_statement", StringType(), nullable=True),
@@ -96,7 +96,7 @@ REGIONAL_INSIGHTS_SCHEMA = StructType([
     StructField("insight_category", StringType(), nullable=False),
     StructField("insight_value", StringType(), nullable=False),
     StructField("facility_count", IntegerType(), nullable=True),
-    StructField("total_beds", IntegerType(), nullable=True),
+    StructField("total_capacity", IntegerType(), nullable=True),
     StructField("total_doctors", IntegerType(), nullable=True),
     StructField("contributing_facility_ids", ArrayType(StringType()), nullable=True),
 ])
