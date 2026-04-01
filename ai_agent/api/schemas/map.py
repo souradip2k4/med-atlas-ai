@@ -27,6 +27,7 @@ class FacilityPoint(BaseModel):
 class FilterMetadata(BaseModel):
     regions: List[str]
     cities_by_region: Dict[str, List[str]]
+    specialties: List[str]
     affiliation_types: List[str]
     facility_types: List[str]
     operator_types: List[str]
