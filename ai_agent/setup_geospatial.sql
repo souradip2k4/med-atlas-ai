@@ -45,6 +45,7 @@ RETURN (
     ),
     sorted_facilities AS (
       SELECT
+        fr.facility_id,
         fr.facility_name,
         fr.facility_type,
         fr.city,
@@ -100,6 +101,7 @@ RETURN (
           CAST(COUNT(*) AS STRING),
           COALESCE((SELECT condition FROM params), 'none'),
           to_json(collect_list(named_struct(
+            'facility_id',     facility_id,
             'facility_name',   facility_name,
             'facility_type',   facility_type,
             'city',            city,
@@ -201,6 +203,8 @@ RETURN (
         fr.facility_type,
         fr.city,
         fr.state,
+        fr.latitude   AS fac_lat,
+        fr.longitude  AS fac_lon,
         h.hub_name,
         (ST_DistanceSpheroid(ST_POINT(fr.longitude, fr.latitude), ST_POINT(h.hub_lon, h.hub_lat)) / 1000.0) AS dist_km
       FROM med_atlas_ai.default.facility_records fr
@@ -220,15 +224,17 @@ RETURN (
     ),
     ranked_distances AS (
       SELECT
+        facility_id,
         facility_name,
         facility_type,
         city,
         state,
+        fac_lat,
+        fac_lon,
         hub_name,
         dist_km,
-        ROW_NUMBER() OVER (PARTITION BY facility_id ORDER BY dist_km ASC) as rnk
+        ROW_NUMBER() OVER (PARTITION BY facility_id ORDER BY dist_km ASC) AS rnk
       FROM facility_hub_distances
-      ORDER BY dist_km
     )
     SELECT to_json(
       map_from_arrays(
@@ -237,11 +243,14 @@ RETURN (
           'urban_rural',
           COALESCE((SELECT condition FROM params), 'none'),
           to_json(collect_list(named_struct(
-            'facility_name', facility_name,
-            'facility_type', facility_type,
-            'city',          city,
-            'state',         state,
-            'nearest_hub',   hub_name,
+            'facility_id',            facility_id,
+            'facility_name',          facility_name,
+            'facility_type',          facility_type,
+            'city',                   city,
+            'state',                  state,
+            'latitude',               fac_lat,
+            'longitude',              fac_lon,
+            'nearest_hub',            hub_name,
             'dist_to_nearest_hub_km', ROUND(dist_km, 2)
           )))
         )

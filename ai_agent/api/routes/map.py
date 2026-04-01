@@ -71,7 +71,8 @@ def search_facilities(request: MapSearchRequest):
         "facility_type": "hospital",               # Optional
         "operator_type": "public",                 # Optional
         "organization_type": "facility",           # Optional
-        "affiliation_types": ["government"]        # Optional array
+        "affiliation_types": ["government"],       # Optional array
+        "bbox": [5.5, -0.3, 5.7, -0.1]             # Optional [min_lat, min_lon, max_lat, max_lon]
     }
     """
     conditions = ["country = 'Ghana'"]
@@ -95,6 +96,12 @@ def search_facilities(request: MapSearchRequest):
     if request.affiliation_types and len(request.affiliation_types) > 0:
         affils_str = ",".join(f"'{_escape(a)}'" for a in request.affiliation_types)
         conditions.append(f"ARRAYS_OVERLAP(affiliation_types, array({affils_str}))")
+        
+    # Viewport bounding box: [min_lat, min_lon, max_lat, max_lon]
+    if request.bbox and len(request.bbox) == 4:
+        min_lat, min_lon, max_lat, max_lon = request.bbox
+        conditions.append(f"CAST(latitude AS DOUBLE) BETWEEN {min_lat} AND {max_lat}")
+        conditions.append(f"CAST(longitude AS DOUBLE) BETWEEN {min_lon} AND {max_lon}")
 
     where_clause = " AND ".join(conditions)
     
