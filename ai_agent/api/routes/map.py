@@ -24,7 +24,7 @@ def _escape(val: str) -> str:
 
 @router.get("/metadata", response_model=FilterMetadata)
 def get_metadata():
-    """Fetch distinct regions and cities, plus return static filter lists."""
+    """Fetch distinct regions, cities, and specialties, plus return static filter lists."""
     query = "SELECT DISTINCT state, city FROM med_atlas_ai.default.facility_records WHERE country = 'Ghana' AND state IS NOT NULL"
     results = execute_sql(query)
     
@@ -41,9 +41,17 @@ def get_metadata():
             
     regions = list(cities_by_region.keys())
     
+    # Fetch unique specialties
+    spec_query = "SELECT DISTINCT explode(specialties) AS specialty FROM med_atlas_ai.default.facility_records WHERE country = 'Ghana' AND specialties IS NOT NULL"
+    spec_results = execute_sql(spec_query)
+    specialties = sorted(
+        [r.get("specialty") for r in spec_results if r.get("specialty")]
+    )
+    
     return FilterMetadata(
         regions=regions,
         cities_by_region=cities_by_region,
+        specialties=specialties,
         affiliation_types=STATIC_AFFILIATIONS,
         facility_types=STATIC_FACILITIES,
         operator_types=STATIC_OPERATORS,
@@ -52,7 +60,20 @@ def get_metadata():
 
 @router.post("/search")
 def search_facilities(request: MapSearchRequest):
-    """Search facilities for the map using region and optional filters."""
+    """
+    Search facilities for the map using region and optional filters.
+    
+    Expected JSON Payload:
+    {
+        "region": "Greater Accra Region",          # Mandatory
+        "city": "Accra",                           # Optional
+        "specialties": ["Cardiology"],             # Optional array
+        "facility_type": "hospital",               # Optional
+        "operator_type": "public",                 # Optional
+        "organization_type": "facility",           # Optional
+        "affiliation_types": ["government"]        # Optional array
+    }
+    """
     conditions = ["country = 'Ghana'"]
     
     # Mandatory Region
@@ -89,11 +110,22 @@ def search_facilities(request: MapSearchRequest):
     
     results = execute_sql(query)
     # The SDK parses doubles properly from unity catalog
-    return {"facilities": results}
+    return {
+        "count": len(results),
+        "facilities": results
+    }
 
 @router.get("/facility/{facility_id}")
 def get_facility(facility_id: str):
-    """Fetch the full deep-dive profile of a single facility."""
+    """
+    Fetch the full deep-dive profile of a single facility.
+    
+    Path Parameter:
+        facility_id: The UUID or unique identifier of the facility.
+        
+    Example URL:
+        GET /map/facility/fac-123-abc
+    """
     query = f"""
         SELECT *
         FROM med_atlas_ai.default.facility_records
