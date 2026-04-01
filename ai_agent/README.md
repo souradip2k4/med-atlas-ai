@@ -68,43 +68,83 @@ Handles distance calculations and spatial clustering using `ST_DistanceSpheroid`
 
 ---
 
-## 🌐 4. FastAPI Server Endpoints (`server.py`)
+---
 
-We wrap the Med-Atlas-AI LangChain agent in a FastAPI application to serve it externally while preserving MLflow evaluation traces.
+## 🌐 4. Modular API Architecture (`ai_agent/api/`)
 
-* **`GET /health`**
-  - **Purpose:** Standard health check.
-  - **Returns:** API status, Agent name, LLM Endpoint target, and a list of registered tools.
+The server has been refactored into a scalable, modular structure to support both the LLM Agent and the Frontend Map UI.
 
-* **`GET /tools`**
-  - **Purpose:** Discovery endpoint.
-  - **Returns:** A JSON schema dump of every tool available to the agent (name, description, required parameters).
-
-* **`POST /invoke`**
-  - **Purpose:** Primary execution endpoint (replacing CLI `AGENT.predict`). 
-  - **Payload:** Accepts an array of conversation `messages` and an optional `user_id` for conversational memory tracking.
-  - **Returns:** A parsed response object separating `function_call` (tool usage intent), `function_call_output` (raw SQL JSON data), and `message` (final LLM synthesized markdown answer).
+### Directory Structure
+- `api/main.py`: Entry point that assembles FastAPI routers and middleware.
+- `api/routes/`:
+    - `agent.py`: LLM orchestration endpoints (`/invoke`, `/tools`).
+    - `map.py`: Backend logic for the Map UI (`/map/search`, `/map/metadata`).
+- `api/schemas/`: Pydantic models for request/response validation.
+- `api/services/`:
+    - `databricks_sql.py`: Lightweight wrapper using the **Databricks Statement Execution API** for high-performance REST queries.
 
 ---
 
-## 💻 5. Local Development & Deployment
+## 🗺️ 5. Map UI Backend API (`/map/`)
+
+These endpoints power the interactive map interface for Ghana's healthcare infrastructure.
+
+### `GET /map/metadata`
+- **Purpose**: Populates frontend filters (dropdowns, multi-selects).
+- **Dynamic Content**: Fetches all unique `state` (regions), `city` labels, and `specialties` directly from the database.
+- **Static Content**: Returns standardized lists for `facility_type`, `operator_type`, `organization_type`, and `affiliation_types`.
+
+### `POST /map/search`
+- **Purpose**: Returns facility markers and summary cards based on user filters.
+- **Payload Example**:
+  ```json
+  {
+      "region": "Greater Accra Region",
+      "city": "Accra",
+      "specialties": ["Cardiology", "Dentistry"],
+      "facility_type": "hospital",
+      "operator_type": "public",
+      "affiliation_types": ["government"]
+  }
+  ```
+- **Features**:
+    - **Count**: Returns a `count` field for the "Results Found" UI counter.
+    - **Advanced Filtering**: Uses `ARRAYS_OVERLAP` in SQL to efficiently filter multi-value fields like specialties.
+
+### `GET /map/facility/{facility_id}`
+- **Purpose**: Fetches the complete medical profile for a single facility when clicked on the map.
+
+---
+
+## 🧪 6. LLM Agent Endpoints
+
+* **`POST /invoke`**: Primary endpoint for conversational AI interaction.
+* **`GET /health`**: Returns system status and tool availability.
+* **`GET /tools`**: Returns the JSON schema for all agentic tools.
+
+---
+
+## 💻 7. Local Development & Deployment
+
+### Implicit Authentication
+The API utilizes the **Databricks Default Credentials** chain. By calling `load_dotenv()`, the system automatically picks up `DATABRICKS_HOST` and `DATABRICKS_TOKEN` from your `.env` file without requiring manual wiring in the code.
 
 ### Running the Local Server
 ```bash
-# Start the FastAPI uvicorn server with auto-reload disabled (or adjust reload=True)
-uv run python -m ai_agent.server
+# Start the server (aliased via ai_agent.server for backwards compatibility)
+uv run uvicorn ai_agent.server:app --reload --port 8000
 ```
 
-### Applying SQL Updates to Databricks Unity Catalog
-If you modify the logic inside `setup_uc_function.sql` or `setup_geospatial.sql`, you must sync the function to Databricks:
+### Applying SQL Updates
+Sync your analytic functions to Unity Catalog:
 ```bash
 uv run python ai_agent/run_sql.py ai_agent/setup_uc_function.sql
 uv run python ai_agent/run_sql.py ai_agent/setup_geospatial.sql
 ```
 
-### Deploying the Agent
-The agent is bundled and deployed via Databricks Model Serving. To deploy/update:
+### Deployment
+Deploy as a Databricks App or Model Serving endpoint:
 ```bash
 uv run python ai_agent/deploy_agent.py
 ```
-*(Ensure your `databricks.yml` and `deploy-agent.yml` configurations map to the correct endpoint variables.)*
+*(Check `databricks.yml` for environment-specific configurations.)*
