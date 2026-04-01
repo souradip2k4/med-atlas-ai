@@ -584,39 +584,62 @@ class _ToolCallTracker:
         """
         Parse vector_search_tool output.
         Output is a list of LangChain Documents with metadata from facility_facts.
+        facility_facts has NO lat/lon — coordinates are only in facility_records.
+        We extract facility_id here; the frontend can enrich coords from /map/facility/{id}.
         """
         sources: list[dict[str, Any]] = []
         try:
-            # The raw output from vector_search_tool is a Python repr of a list of Documents.
-            # We extract structured data using regex on the metadata dict.
             import re
-            # Match each document block
+            # Primary: try JSON parse if output was serialised
+            try:
+                docs = json.loads(raw_output)
+                if isinstance(docs, list):
+                    for doc in docs:
+                        meta = doc.get("metadata", {}) if isinstance(doc, dict) else {}
+                        page_content = doc.get("page_content", "") if isinstance(doc, dict) else ""
+                        snippet = page_content[:200] + "..." if len(page_content) > 200 else page_content
+                        sources.append({
+                            "source_type": "facility_facts",
+                            "fact_id": meta.get("fact_id"),
+                            "facility_id": meta.get("facility_id"),
+                            "fact_type": meta.get("fact_type"),
+                            "excerpt": snippet,
+                            # No lat/lon — facility_facts table has none
+                        })
+                    return {
+                        "step_index": None,
+                        "tool_name": call_name,
+                        "call_id": call_id,
+                        "query_used": call_args.get("query", ""),
+                        "tables_accessed": ["facility_facts"],
+                        "sources": sources,
+                    }
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            # Fallback: regex on Python repr of LangChain Document objects
             doc_pattern = re.compile(
-                r"metadata=\{([^}]+)\}.*?page_content='(.*?)(?='\))",
+                r"metadata=\{([^}]+)\}.*?page_content='(.*?)(?='\s*\))",
                 re.DOTALL,
             )
             for m in doc_pattern.finditer(raw_output):
                 meta_str = m.group(1)
                 page_content = m.group(2).strip()
                 meta: dict[str, str] = {}
-                for kv in re.finditer(r"'(\w+)':\s*'([^']*)'" , meta_str):
+                for kv in re.finditer(r"'(\w+)':\s*'([^']*)'", meta_str):
                     meta[kv.group(1)] = kv.group(2)
-                # Attempt to get facility name from page_content prefix
-                name_match = re.match(r'^([^\n]+?) in ', page_content)
-                facility_name = name_match.group(1).strip() if name_match else None
                 snippet = page_content[:200] + "..." if len(page_content) > 200 else page_content
                 sources.append({
                     "source_type": "facility_facts",
                     "fact_id": meta.get("fact_id"),
                     "facility_id": meta.get("facility_id"),
-                    "facility_name": facility_name,
                     "fact_type": meta.get("fact_type"),
                     "excerpt": snippet,
                 })
         except Exception:
             pass
         return {
-            "step_index": None,  # filled in by caller
+            "step_index": None,
             "tool_name": call_name,
             "call_id": call_id,
             "query_used": call_args.get("query", ""),
@@ -630,6 +653,7 @@ class _ToolCallTracker:
         """
         Parse medical_agent_tool output.
         Returns JSON with a 'findings' array from facility_records and/or facility_facts.
+        Now also extracts latitude/longitude from enriched SQL branches (1, 4, 5, 7, 8).
         """
         sources: list[dict[str, Any]] = []
         tables_accessed: set[str] = {"facility_records"}
@@ -648,20 +672,24 @@ class _ToolCallTracker:
                     tables_accessed.add("facility_facts")
                 if finding_type in ("regional_coverage",):
                     tables_accessed.add("regional_insights")
-                # Build a source entry
+                # Build a source entry — extract lat/lon where the SQL now provides them
                 source: dict[str, Any] = {
                     "source_type": "facility_records",
                     "finding_type": finding_type,
                     "facility_id": f.get("facility_id") or f.get("region"),
                     "facility_name": f.get("facility_name") or f.get("region"),
+                    # lat/lon now present in branches: reliability_score, anomaly_flagging,
+                    # feature_mismatch_raw, facility_profile_counts, data_staleness
+                    "latitude": f.get("latitude"),
+                    "longitude": f.get("longitude"),
                     "severity": f.get("severity"),
                     "note": f.get("note") or f.get("reason") or f.get("recommendation"),
                 }
-                # For regional findings, override source_type
-                if finding_type in ("regional_coverage", "data_staleness"):
-                    source["source_type"] = "facility_records"
                 if finding_type == "regional_coverage":
                     source["source_type"] = "regional_insights"
+                    # regional_coverage is state-level, no individual pin — drop lat/lon
+                    source["latitude"] = None
+                    source["longitude"] = None
                     source["region"] = f.get("region")
                     source["total_facilities"] = f.get("total_facilities")
                 sources.append(source)
@@ -681,31 +709,62 @@ class _ToolCallTracker:
                                call_args: dict, raw_output: str) -> dict[str, Any]:
         """
         Parse genie_chat_tool output.
-        Genie returns free text but often mentions facility names or regions.
-        We record the query and try to detect which tables are referenced.
+        Genie returns either free-text or a structured table (rows + columns).
+        We attempt to parse the structured table format first to extract facility rows.
+        Genie queries facility_records and/or regional_insights — never facility_facts.
+        NOTE: Genie output has no lat/lon — Genie does SELECT on aggregated data.
+        The frontend requests coords from /map/facility/{id} using extracted facility_ids.
         """
-        import re
+        sources: list[dict[str, Any]] = []
         tables_accessed: list[str] = []
-        raw_lower = raw_output.lower()
-        if any(w in raw_lower for w in ["facility", "hospital", "clinic", "operator"]):
+        raw_lower = raw_output.lower() if isinstance(raw_output, str) else ""
+
+        # Detect accessed tables from keywords in the response text
+        if any(w in raw_lower for w in ["facility", "hospital", "clinic", "dentist", "doctor", "farmacy"]):
             tables_accessed.append("facility_records")
-        if any(w in raw_lower for w in ["region", "state", "district", "insight"]):
+        if any(w in raw_lower for w in ["region", "state", "district", "insight", "coverage"]):
             tables_accessed.append("regional_insights")
         if not tables_accessed:
             tables_accessed = ["facility_records"]
-        # Try to capture a short snippet of the genie response
-        snippet = raw_output[:400] + "..." if len(raw_output) > 400 else raw_output
+
+        # Attempt to parse Genie structured output: may be a dict with 'columns' and 'data'
+        try:
+            # Genie sometimes returns: {'columns': [...], 'data': [[val1, val2, ...], ...]}
+            parsed = json.loads(raw_output) if isinstance(raw_output, str) else raw_output
+            if isinstance(parsed, dict):
+                columns = parsed.get("columns") or parsed.get("schema", {}).get("fields", [])
+                rows = parsed.get("data") or parsed.get("result", [])
+                if columns and rows:
+                    col_names = [c if isinstance(c, str) else c.get("name", f"col_{i}") for i, c in enumerate(columns)]
+                    for row in rows[:20]:  # cap at 20 rows to avoid huge citations
+                        row_dict = dict(zip(col_names, row)) if isinstance(row, list) else row
+                        sources.append({
+                            "source_type": "genie_row",
+                            "facility_id": row_dict.get("facility_id"),
+                            "facility_name": row_dict.get("facility_name"),
+                            "city": row_dict.get("city"),
+                            "state": row_dict.get("state"),
+                            # No lat/lon — Genie SELECT does not include geospatial columns
+                        })
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+
+        # Fallback: capture a text snippet for provenance
+        if not sources:
+            snippet = raw_output[:400] + "..." if isinstance(raw_output, str) and len(raw_output) > 400 else str(raw_output)
+            sources = [{
+                "source_type": "genie_response",
+                "tables_queried": tables_accessed,
+                "excerpt": snippet,
+            }]
+
         return {
             "step_index": None,
             "tool_name": call_name,
             "call_id": call_id,
             "query_used": call_args.get("query", ""),
             "tables_accessed": tables_accessed,
-            "sources": [{
-                "source_type": "genie_response",
-                "tables_queried": tables_accessed,
-                "excerpt": snippet,
-            }],
+            "sources": sources,
         }
 
     @staticmethod
@@ -713,23 +772,53 @@ class _ToolCallTracker:
                                     call_args: dict, raw_output: str) -> dict[str, Any]:
         """
         Parse geospatial_query_tool output.
-        Returns a JSON array of facility records with distances.
+        The SQL function wraps results in a top-level JSON object:
+          { 'analysis_type': '...', 'facilities': '[{...}, ...]'  }  (nearby / urban_rural)
+          { 'analysis_type': 'cold_spot', 'cold_spot_regions': '[{...}]' }  (cold_spot)
+        The inner 'facilities' value is itself a JSON-encoded string in some SDK versions.
         """
         sources: list[dict[str, Any]] = []
+        analysis_type = "nearby"
         try:
-            data = json.loads(raw_output)
-            results = data if isinstance(data, list) else data.get("facilities", [])
-            for r in (results or []):
-                if not isinstance(r, dict):
-                    continue
-                sources.append({
-                    "source_type": "facility_records",
-                    "facility_id": r.get("facility_id"),
-                    "facility_name": r.get("facility_name"),
-                    "city": r.get("city"),
-                    "state": r.get("state"),
-                    "distance_km": r.get("distance_km"),
-                })
+            outer = json.loads(raw_output)
+            analysis_type = outer.get("analysis_type", "nearby")
+
+            if analysis_type == "cold_spot":
+                regions_raw = outer.get("cold_spot_regions", "[]")
+                regions = json.loads(regions_raw) if isinstance(regions_raw, str) else regions_raw
+                for r in (regions or []):
+                    if not isinstance(r, dict):
+                        continue
+                    sources.append({
+                        "source_type": "facility_records",
+                        "region": r.get("state"),
+                        "country": r.get("country"),
+                        # region_centre lat/lon for map shading
+                        "latitude": r.get("region_centre_lat"),
+                        "longitude": r.get("region_centre_lon"),
+                        "total_facilities": r.get("total_facilities"),
+                        "matching_facilities": r.get("matching_facilities"),
+                    })
+            else:
+                # nearby or urban_rural
+                facilities_raw = outer.get("facilities", "[]")
+                facilities = json.loads(facilities_raw) if isinstance(facilities_raw, str) else facilities_raw
+                for r in (facilities or []):
+                    if not isinstance(r, dict):
+                        continue
+                    sources.append({
+                        "source_type": "facility_records",
+                        "facility_id": r.get("facility_id"),
+                        "facility_name": r.get("facility_name"),
+                        "city": r.get("city"),
+                        "state": r.get("state"),
+                        # lat/lon now present from updated SQL (nearby + urban_rural)
+                        "latitude": r.get("latitude"),
+                        "longitude": r.get("longitude"),
+                        "distance_km": r.get("distance_km"),
+                        "nearest_hub": r.get("nearest_hub"),
+                        "dist_to_nearest_hub_km": r.get("dist_to_nearest_hub_km"),
+                    })
         except Exception:
             pass
         return {
@@ -738,6 +827,7 @@ class _ToolCallTracker:
             "call_id": call_id,
             "query_used": str(call_args),
             "tables_accessed": ["facility_records"],
+            "analysis_type": analysis_type,
             "sources": sources,
         }
 

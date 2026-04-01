@@ -9,6 +9,10 @@ class MapSearchRequest(BaseModel):
     operator_type: Optional[str] = None
     organization_type: Optional[str] = None
     affiliation_types: Optional[List[str]] = None
+    bbox: Optional[List[float]] = Field(
+        default=None,
+        description="Viewport bounding box: [min_lat, min_lon, max_lat, max_lon]. When provided, only facilities within this rectangle are returned."
+    )
 
 class FacilityPoint(BaseModel):
     facility_id: str

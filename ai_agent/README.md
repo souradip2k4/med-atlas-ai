@@ -45,6 +45,9 @@ This pure-SQL Unity Catalog function (`med_atlas_ai.default.analyze_medical_quer
 | **7. Problem Classification** | Systemic Failure | Filters for facilities missing entire core pillars (Specialties, Procedures, Equipment) and asks the LLM to diagnose `equipment_gap`, `service_gap`, etc. |
 | **8. Data Staleness** | Age verification | Classifies the `updated_at` timestamp as current, moderate, aging, or stale (1yr+). |
 
+### 📍 Geospatial Payload Enrichment
+All relevant SQL branches (Reliability, Anomaly Flagging, Feature Mismatch, Problem Classification, and Staleness) explicitly return `facility_id`, `latitude`, and `longitude` in their JSON output. This allows the frontend map to immediately pan to and highlight any facility the LLM mentions in its analysis.
+
 ### ⚠️ The Missing Data Philosophy (NULL vs Zero)
 A major design pillar of the Medical Agent Engine is explicitly preventing the LLM from hallucinating anomalies due to scraped data gaps.
 - The SQL differentiates between **`missing_data`** (the tool failed to scrape the equipment field, it is `NULL`) and **`true_zero`** (the tool scraped it and found nothing, or the user input 0).
@@ -65,6 +68,8 @@ Handles distance calculations and spatial clustering using `ST_DistanceSpheroid`
 3. **Urban/Rural Gap Analysis (`urban_rural`)**:
    - Takes a dynamic array of "Urban Hubs".
    - Calculates the distance of every medical facility to its absolutely nearest provided hub, aiding in resource accessibility research.
+
+*Note: All geospatial branches return `facility_id`, `latitude`, and `longitude` natively, enabling immediate map rendering.*
 
 ---
 
@@ -104,12 +109,14 @@ These endpoints power the interactive map interface for Ghana's healthcare infra
       "specialties": ["Cardiology", "Dentistry"],
       "facility_type": "hospital",
       "operator_type": "public",
-      "affiliation_types": ["government"]
+      "affiliation_types": ["government"],
+      "bbox": [5.5, -0.3, 5.7, -0.1]
   }
   ```
 - **Features**:
+    - **Viewport Bounding Box Filtering**: If a `bbox` (`[min_lat, min_lon, max_lat, max_lon]`) is provided, the API uses SQL `BETWEEN` operators to rapidly filter facilities strictly to the user's current map camera view.
+    - **Advanced Array Filtering**: Uses `ARRAYS_OVERLAP` in SQL to efficiently filter multi-value fields like specialties.
     - **Count**: Returns a `count` field for the "Results Found" UI counter.
-    - **Advanced Filtering**: Uses `ARRAYS_OVERLAP` in SQL to efficiently filter multi-value fields like specialties.
 
 ### `GET /map/facility/{facility_id}`
 - **Purpose**: Fetches the complete medical profile for a single facility when clicked on the map.
@@ -124,7 +131,19 @@ These endpoints power the interactive map interface for Ghana's healthcare infra
 
 ---
 
-## 💻 7. Local Development & Deployment
+## 🗺️🤖 7. Map-LLM Integration (Two-Way Sync)
+
+The architecture is uniquely designed to support **Two-Way Synchronization** between the Map UI and the Conversational Agent:
+
+1. **Map drives the LLM**: Operations performed on the map (like moving the bounding box or applying filters) can be injected into the LLM context.
+2. **LLM drives the Map (Citation Sync)**: 
+   - When the agent uses `medical_agent_tool` or `geospatial_query_tool`, the SQL engine returns `facility_id`, `latitude`, and `longitude`.
+   - The parsers in `agent.py` capture these exact coordinates and embed them into the structured `citations` array.
+   - When the Frontend receives the `/invoke` streaming response, it parses these citations and automatically plots, pans to, or pulses the pins for any facility the LLM decided to talk about in its response.
+
+---
+
+## 💻 8. Local Development & Deployment
 
 ### Implicit Authentication
 The API utilizes the **Databricks Default Credentials** chain. By calling `load_dotenv()`, the system automatically picks up `DATABRICKS_HOST` and `DATABRICKS_TOKEN` from your `.env` file without requiring manual wiring in the code.

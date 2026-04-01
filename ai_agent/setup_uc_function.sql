@@ -37,6 +37,8 @@ THEN (
     SELECT
       fr.facility_id,
       fr.facility_name,
+      fr.latitude,
+      fr.longitude,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       COALESCE(ff.cnt, 0)                   AS n_facts,
       fr.capacity,
@@ -128,8 +130,11 @@ THEN (
         parse_json(query_json):query,
         to_json(array_agg(named_struct(
           'type', 'reliability_score',
+          'facility_id', facility_id,
           'facility_name', facility_name,
           'facility_type', facility_type,
+          'latitude', latitude,
+          'longitude', longitude,
           'reliability_score', reliability_score,
           'rating',
             CASE WHEN reliability_score >= 85 THEN 'high'
@@ -281,7 +286,10 @@ THEN (
   outliers AS (
     -- Capacity outliers
     SELECT
+      fr.facility_id,
       fr.facility_name,
+      fr.latitude,
+      fr.longitude,
       COALESCE(fr.facility_type, 'unknown')                         AS facility_type,
       'beds'                                                         AS measurement,
       CAST(fr.capacity AS INT)                                       AS reported_value,
@@ -306,7 +314,10 @@ THEN (
 
     -- Doctor count outliers
     SELECT
+      fr.facility_id,
       fr.facility_name,
+      fr.latitude,
+      fr.longitude,
       COALESCE(fr.facility_type, 'unknown')                          AS facility_type,
       'doctors'                                                       AS measurement,
       CAST(fr.no_doctors AS INT)                                      AS reported_value,
@@ -338,8 +349,11 @@ THEN (
         COALESCE(
           to_json(array_agg(named_struct(
             'type',           'anomaly_flagging',
+            'facility_id',    facility_id,
             'facility_name',  facility_name,
             'facility_type',  facility_type,
+            'latitude',       latitude,
+            'longitude',      longitude,
             'measurement',    measurement,
             'reported_value', reported_value,
             'typical_value',  typical_value,
@@ -406,6 +420,8 @@ THEN (
     SELECT
       p.facility_id,
       fr.facility_name,
+      fr.latitude,
+      fr.longitude,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       p.n_procedures,
       COALESCE(e.n_equipment, 0) AS n_equipment,
@@ -437,6 +453,8 @@ THEN (
             'facility_id',    facility_id,
             'facility_name',  facility_name,
             'facility_type',  facility_type,
+            'latitude',       latitude,
+            'longitude',      longitude,
             'n_procedures',   n_procedures,
             'n_equipment',    n_equipment,
             'ratio',          ratio,
@@ -527,6 +545,8 @@ THEN (
       fr.facility_name,
       fr.state,
       fr.city,
+      fr.latitude,
+      fr.longitude,
       COALESCE(fr.facility_type, 'unknown') AS facility_type,
       fr.operator_type,
       COALESCE(CAST(fr.capacity AS INT), 0) AS capacity,
@@ -544,7 +564,7 @@ THEN (
     WHERE organization_type = 'facility'
   ),
 
-  -- Step 3: filter to facilities that are partially missing something, 
+  -- Step 3: filter to facilities that are partially missing something,
   -- but strictly exclude facilities that are 100% empty (to save LLM context window)
   flagged_facilities AS (
     SELECT *,
@@ -565,7 +585,7 @@ THEN (
       array('query', 'findings', 'data_coverage_summary'),
       array(
         parse_json(query_json):query,
-        
+
         COALESCE(
           to_json(array_agg(named_struct(
             'type', 'facility_profile_counts',
@@ -573,6 +593,8 @@ THEN (
             'facility_name', facility_name,
             'state', state,
             'city', city,
+            'latitude', latitude,
+            'longitude', longitude,
             'facility_type', facility_type,
             'operator_type', operator_type,
             'equipment_count', n_equip,
@@ -606,6 +628,8 @@ THEN (
     SELECT
       fr.facility_id,
       fr.facility_name,
+      fr.latitude,
+      fr.longitude,
       fr.updated_at,
       DATEDIFF(CURRENT_TIMESTAMP(), fr.updated_at) AS days_old,
       DATEDIFF(CURRENT_TIMESTAMP(), fr.created_at) AS days_since_created,
@@ -614,7 +638,7 @@ THEN (
         WHEN DATEDIFF(CURRENT_TIMESTAMP(), fr.updated_at) IS NULL THEN 'unknown'
         WHEN DATEDIFF(CURRENT_TIMESTAMP(), fr.updated_at) > 365 THEN 'stale'
         WHEN DATEDIFF(CURRENT_TIMESTAMP(), fr.updated_at) > 180 THEN 'aging'
-        WHEN DATEDIFF(CURRENT_TIMESTAMP(), fr.updated_at) > 90 THEN 'moderate'
+        WHEN DATEDIFF(CURRENT_TIMESTAMP(), fr.updated_at) > 90  THEN 'moderate'
         ELSE 'current'
       END AS data_status
     FROM med_atlas_ai.default.facility_records fr
@@ -629,6 +653,8 @@ THEN (
           'type', 'data_staleness',
           'facility_id', facility_id,
           'facility_name', facility_name,
+          'latitude', latitude,
+          'longitude', longitude,
           'days_since_update', days_old,
           'days_since_created', days_since_created,
           'data_status', data_status,
@@ -642,8 +668,8 @@ THEN (
             END,
           'recommendation',
             CASE data_status
-              WHEN 'stale' THEN 'Data is over 1 year old — schedule re-verification'
-              WHEN 'aging' THEN 'Data is 6-12 months old — verify with facility'
+              WHEN 'stale'    THEN 'Data is over 1 year old — schedule re-verification'
+              WHEN 'aging'    THEN 'Data is 6-12 months old — verify with facility'
               WHEN 'moderate' THEN 'Data is 3-6 months old — update soon'
               ELSE 'Data is current'
             END
