@@ -1,15 +1,9 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { MapPinned, MapPin, Stethoscope, X } from 'lucide-react';
 
-import { countActiveAdvancedFilters, formatLabel } from '../lib/format';
+import { formatLabel } from '../lib/format';
 import type { DropdownKey, MapMetadata, SearchFilters } from '../lib/types';
-import {
-  CityIcon,
-  CloseIcon,
-  RegionIcon,
-  SearchIcon,
-  SpecialtyIcon,
-} from './Icons';
 
 interface TopSearchBarProps {
   metadata: MapMetadata | undefined;
@@ -43,23 +37,33 @@ function FieldButton({
   onClick,
   onClear,
 }: FieldButtonProps) {
+  const buttonClass = active
+    ? 'flex h-14 items-center gap-3 rounded-pill border-0 bg-surface-filter-strong px-3.5 py-2 text-left text-ink-900 shadow-inset-filter transition duration-200'
+    : 'flex h-14 items-center gap-3 rounded-pill border-0 bg-transparent px-3.5 py-2 text-left text-ink-900 transition duration-200 hover:bg-surface-filter-strong hover:shadow-inset-filter';
+
   return (
     <button
       type="button"
-      className={`filter-pill ${active ? 'is-active' : ''}`}
+      className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-55`}
       onClick={onClick}
       disabled={disabled}
     >
-      <span className="filter-pill__icon">{icon}</span>
-      <span className="filter-pill__body">
-        <span className="filter-pill__label">{label}</span>
-        <span className={`filter-pill__value ${value ? '' : 'is-placeholder'}`}>
+      <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-surface-accent text-accent-600">
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-pill-label text-ink-500">{label}</span>
+        <span
+          className={`truncate text-base font-semibold ${
+            value ? 'text-ink-900' : 'text-ink-400'
+          }`}
+        >
           {value || `Add ${label.toLowerCase()}`}
         </span>
       </span>
       {onClear && value ? (
         <span
-          className="filter-pill__clear"
+          className="inline-flex size-6.5 items-center justify-center rounded-full bg-white/95 text-accent-600 shadow-chip"
           onClick={(event) => {
             event.stopPropagation();
             onClear();
@@ -73,7 +77,7 @@ function FieldButton({
             }
           }}
         >
-          <CloseIcon />
+          <X className="size-3.5" />
         </span>
       ) : null}
     </button>
@@ -109,13 +113,15 @@ export function TopSearchBar({
 
   const cityOptions = metadata?.cities_by_region[filters.region] ?? [];
   const specialtyCount = filters.specialties.length;
-  const advancedCount = countActiveAdvancedFilters(filters);
 
   return (
-    <div className="top-search-shell" ref={shellRef}>
-      <div className="top-search">
+    <div
+      className="absolute left-1/2 top-7 z-30 w-[min(880px,calc(100%-112px))] -translate-x-1/2 max-[920px]:top-3 max-[920px]:w-[calc(100%-24px)]"
+      ref={shellRef}
+    >
+      <div className="grid animate-chrome-in grid-cols-3 gap-2 rounded-[30px] border border-white/88 bg-white/94 shadow-search backdrop-blur-[18px] max-w-[700px]">
         <FieldButton
-          icon={<RegionIcon />}
+          icon={<MapPinned className="size-5" />}
           label="Region"
           value={filters.region}
           active={activeDropdown === 'region'}
@@ -125,7 +131,7 @@ export function TopSearchBar({
           onClear={filters.region ? onClearRegion : undefined}
         />
         <FieldButton
-          icon={<CityIcon />}
+          icon={<MapPin className="size-5" />}
           label="City"
           value={filters.city}
           active={activeDropdown === 'city'}
@@ -134,7 +140,7 @@ export function TopSearchBar({
           onClear={filters.city ? onClearCity : undefined}
         />
         <FieldButton
-          icon={<SpecialtyIcon />}
+          icon={<Stethoscope className="size-5" />}
           label="Specialty"
           value={specialtyCount > 0 ? `${specialtyCount} specialties` : ''}
           active={activeDropdown === 'specialty'}
@@ -143,37 +149,30 @@ export function TopSearchBar({
           }
           onClear={specialtyCount > 0 ? onClearSpecialties : undefined}
         />
-        <div className="top-search__status">
-          <span className="top-search__status-copy">
-            {filters.region ? 'Ghana healthcare map' : 'Select a region to begin'}
-          </span>
-          <span className="top-search__status-accent">
-            {advancedCount > 0 ? `${advancedCount} advanced` : 'Map search'}
-          </span>
-          <span className="top-search__status-icon">
-            <SearchIcon />
-          </span>
-        </div>
       </div>
 
       {activeDropdown === 'region' ? (
-        <div className="top-search-panel">
-          <div className="top-search-panel__header">
+        <div className="mx-auto mt-3 w-[min(760px,100%)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]">
+          <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
             <span>Regions</span>
             <span>{metadata?.regions.length ?? 0}</span>
           </div>
-          <div className="option-list">
+          <div className="flex max-h-[320px] flex-col gap-2 overflow-auto">
             {metadata?.regions.map((region) => (
               <button
                 type="button"
                 key={region}
-                className={`option-row ${filters.region === region ? 'is-selected' : ''}`}
+                className={`flex items-center gap-3 rounded-chip border px-4 py-3.5 text-left transition duration-150 ${
+                  filters.region === region
+                    ? 'border-border-highlight bg-surface-accent-strong'
+                    : 'border-border-option bg-white hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
+                }`}
                 onClick={() => {
                   onRegionSelect(region);
                   onDropdownChange(null);
                 }}
               >
-                <RegionIcon className="option-row__icon" />
+                <MapPinned className="size-[18px] shrink-0 text-accent-600" />
                 <span>{region}</span>
               </button>
             ))}
@@ -182,67 +181,77 @@ export function TopSearchBar({
       ) : null}
 
       {activeDropdown === 'city' ? (
-        <div className="top-search-panel top-search-panel--compact">
-          <div className="top-search-panel__header">
+        <div className="mx-auto mt-3 w-[min(560px,100%)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]">
+          <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
             <span>Cities in {filters.region || 'selected region'}</span>
             <span>{cityOptions.length}</span>
           </div>
-          <div className="option-list">
+          <div className="flex max-h-[320px] flex-col gap-2 overflow-auto">
             {cityOptions.length > 0 ? (
               cityOptions.map((city) => (
                 <button
                   type="button"
                   key={city}
-                  className={`option-row ${filters.city === city ? 'is-selected' : ''}`}
+                  className={`flex items-center gap-3 rounded-chip border px-4 py-3.5 text-left transition duration-150 ${
+                    filters.city === city
+                      ? 'border-border-highlight bg-surface-accent-strong'
+                      : 'border-border-option bg-white hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
+                  }`}
                   onClick={() => {
                     onCitySelect(city);
                     onDropdownChange(null);
                   }}
                 >
-                  <CityIcon className="option-row__icon" />
+                  <MapPin className="size-[18px] shrink-0 text-accent-600" />
                   <span>{city}</span>
                 </button>
               ))
             ) : (
-              <div className="option-empty">Choose a region before narrowing to a city.</div>
+              <div className="rounded-chip bg-surface-empty p-4.5 text-ink-500">
+                Choose a region before narrowing to a city.
+              </div>
             )}
           </div>
         </div>
       ) : null}
 
       {activeDropdown === 'specialty' ? (
-        <div className="top-search-panel top-search-panel--wide">
-          <div className="top-search-panel__header">
+        <div className="mx-auto mt-3 w-[min(860px,100%)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]">
+          <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
             <span>Specialties</span>
             <span>{metadata?.specialties.length ?? 0}</span>
           </div>
-          <div className="option-list option-list--grid">
+          <div className="grid max-h-[320px] grid-cols-2 gap-2 overflow-auto max-[920px]:grid-cols-1">
             {metadata?.specialties.map((specialty) => {
               const selected = filters.specialties.includes(specialty);
               return (
                 <button
                   type="button"
                   key={specialty}
-                  className={`option-row ${selected ? 'is-selected' : ''}`}
+                  className={`flex items-center gap-3 rounded-chip border px-4 py-3.5 text-left transition duration-150 ${
+                    selected
+                      ? 'border-border-highlight bg-surface-accent-strong'
+                      : 'border-border-option bg-white hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
+                  }`}
                   onClick={() => onToggleSpecialty(specialty)}
                 >
-                  <SpecialtyIcon className="option-row__icon" />
+                  <Stethoscope className="size-[18px] shrink-0 text-accent-600" />
                   <span>{formatLabel(specialty)}</span>
                 </button>
               );
             })}
           </div>
           {filters.specialties.length > 0 ? (
-            <div className="selected-chip-row">
+            <div className="mt-4 flex flex-wrap gap-2.5">
               {filters.specialties.map((specialty) => (
                 <button
                   type="button"
                   key={specialty}
-                  className="selected-chip"
+                  className="inline-flex items-center gap-2 rounded-full bg-surface-accent px-3.5 py-2 font-semibold text-accent-700"
                   onClick={() => onToggleSpecialty(specialty)}
                 >
                   {formatLabel(specialty)}
-                  <CloseIcon className="selected-chip__icon" />
+                  <X className="size-3.5" />
                 </button>
               ))}
             </div>

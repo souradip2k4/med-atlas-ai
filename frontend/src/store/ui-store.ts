@@ -16,12 +16,15 @@ const DEFAULT_FILTERS: SearchFilters = {
 interface UIState {
   activeDropdown: DropdownKey;
   advancedOpen: boolean;
+  sidebarOpen: boolean;
   hoveredFacilityId: string | null;
   selectedFacilityId: string | null;
   viewportBbox: BoundingBox | null;
   filters: SearchFilters;
   setActiveDropdown: (dropdown: DropdownKey) => void;
   setAdvancedOpen: (open: boolean) => void;
+  toggleSidebar: () => void;
+  setSidebarOpen: (open: boolean) => void;
   setHoveredFacilityId: (facilityId: string | null) => void;
   setSelectedFacilityId: (facilityId: string | null) => void;
   setViewportBbox: (bbox: BoundingBox | null) => void;
@@ -42,12 +45,15 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       activeDropdown: null,
       advancedOpen: false,
+      sidebarOpen: true,
       hoveredFacilityId: null,
       selectedFacilityId: null,
       viewportBbox: null,
       filters: DEFAULT_FILTERS,
       setActiveDropdown: (dropdown) => set({ activeDropdown: dropdown }),
       setAdvancedOpen: (open) => set({ advancedOpen: open }),
+      toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+      setSidebarOpen: (open) => set({ sidebarOpen: open }),
       setHoveredFacilityId: (facilityId) => set({ hoveredFacilityId: facilityId }),
       setSelectedFacilityId: (facilityId) => set({ selectedFacilityId: facilityId }),
       setViewportBbox: (bbox) => set({ viewportBbox: bbox }),
