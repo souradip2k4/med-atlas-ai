@@ -1,5 +1,6 @@
 import { Suspense, lazy, startTransition } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { PanelLeftOpen } from 'lucide-react';
 
 import { FacilityDetailsPanel } from './components/FacilityDetailsPanel';
 import { ResultsSidebar } from './components/ResultsSidebar';
@@ -8,7 +9,6 @@ import { fetchFacilityProfile, fetchMapMetadata, searchFacilities } from './lib/
 import { buildSearchPayload } from './lib/format';
 import { useDebouncedValue } from './lib/hooks';
 import { useUIStore } from './store/ui-store';
-import './App.css';
 
 const MapCanvas = lazy(async () => {
   const module = await import('./components/MapCanvas');
@@ -21,6 +21,7 @@ function App() {
     advancedOpen,
     filters,
     hoveredFacilityId,
+    sidebarOpen,
     selectedFacilityId,
     viewportBbox,
     resetFilters,
@@ -30,6 +31,7 @@ function App() {
     setHoveredFacilityId,
     setRegion,
     setSelectedFacilityId,
+    toggleSidebar,
     setViewportBbox,
     setAdvancedFilter,
     clearSpecialties,
@@ -64,37 +66,64 @@ function App() {
   const resultCount = searchQuery.data?.count ?? 0;
 
   return (
-    <div className="app-shell">
-      <div className="app-backdrop" />
+    <div
+      className={`relative grid min-h-dvh bg-[radial-gradient(circle_at_72%_18%,rgba(140,199,255,0.35),transparent_28%),radial-gradient(circle_at_80%_78%,rgba(27,148,122,0.2),transparent_24%),linear-gradient(180deg,var(--color-surface-app)_0%,#f5f8fc_44%,#e7eef9_100%)] max-[920px]:block ${
+        sidebarOpen
+          ? 'grid-cols-[430px_minmax(0,1fr)] max-[1180px]:grid-cols-[360px_minmax(0,1fr)]'
+          : 'grid-cols-[0_minmax(0,1fr)]'
+      }`}
+    >
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_70%_12%,rgba(55,118,226,0.15),transparent_24%),radial-gradient(circle_at_88%_72%,rgba(8,145,178,0.14),transparent_20%)]" />
 
-      <ResultsSidebar
-        metadata={metadataQuery.data}
-        filters={filters}
-        facilities={facilities}
-        count={resultCount}
-        isLoading={searchQuery.isLoading || searchQuery.isFetching}
-        isError={searchQuery.isError}
-        errorMessage={
-          searchQuery.error instanceof Error
-            ? searchQuery.error.message
-            : 'Search failed for the current map view.'
-        }
-        advancedOpen={advancedOpen}
-        selectedFacilityId={selectedFacilityId}
-        hoveredFacilityId={hoveredFacilityId}
-        onAdvancedToggle={() => setAdvancedOpen(!advancedOpen)}
-        onAdvancedFilterChange={setAdvancedFilter}
-        onAffiliationToggle={toggleAffiliation}
-        onFacilitySelect={(facilityId) => {
-          startTransition(() => {
-            setSelectedFacilityId(facilityId);
-          });
-        }}
-        onFacilityHover={setHoveredFacilityId}
-        onClearSearch={resetFilters}
-      />
+      <div
+        className={`relative overflow-hidden transition-[width,opacity,transform] duration-300 max-[920px]:contents ${
+          sidebarOpen
+            ? 'w-[430px] opacity-100 max-[1180px]:w-[360px]'
+            : 'w-0 opacity-0 -translate-x-6 pointer-events-none'
+        }`}
+      >
+        <ResultsSidebar
+          metadata={metadataQuery.data}
+          filters={filters}
+          facilities={facilities}
+          count={resultCount}
+          isLoading={searchQuery.isLoading || searchQuery.isFetching}
+          isError={searchQuery.isError}
+          errorMessage={
+            searchQuery.error instanceof Error
+              ? searchQuery.error.message
+              : 'Search failed for the current map view.'
+          }
+          advancedOpen={advancedOpen}
+          sidebarOpen={sidebarOpen}
+          selectedFacilityId={selectedFacilityId}
+          hoveredFacilityId={hoveredFacilityId}
+          onAdvancedToggle={() => setAdvancedOpen(!advancedOpen)}
+          onSidebarToggle={toggleSidebar}
+          onAdvancedFilterChange={setAdvancedFilter}
+          onAffiliationToggle={toggleAffiliation}
+          onFacilitySelect={(facilityId) => {
+            startTransition(() => {
+              setSelectedFacilityId(facilityId);
+            });
+          }}
+          onFacilityHover={setHoveredFacilityId}
+          onClearSearch={resetFilters}
+        />
+      </div>
 
-      <main className="workspace">
+      <main className="relative min-h-dvh overflow-hidden">
+        {!sidebarOpen ? (
+          <button
+            type="button"
+            className="absolute left-4 top-5 z-[35] inline-flex size-11 items-center justify-center rounded-full border border-white/90 bg-white/92 text-accent-600 shadow-overlay backdrop-blur-[12px] transition hover:bg-white max-[920px]:hidden"
+            onClick={toggleSidebar}
+            aria-label="Open results sidebar"
+          >
+            <PanelLeftOpen className="size-5" />
+          </button>
+        ) : null}
+
         <TopSearchBar
           metadata={metadataQuery.data}
           filters={filters}
@@ -118,9 +147,9 @@ function App() {
 
         <Suspense
           fallback={
-            <section className="map-shell">
-              <div className="map-fallback">
-                <strong>Preparing the Ghana map</strong>
+            <section className="relative h-dvh w-full overflow-hidden">
+              <div className="absolute inset-0 grid gap-2 rounded-panel bg-surface-panel p-6 text-ink-600 shadow-inset-soft">
+                <strong className="text-ink-900">Preparing the Ghana map</strong>
                 <p>Loading the interactive map workspace and the current healthcare overlays.</p>
               </div>
             </section>

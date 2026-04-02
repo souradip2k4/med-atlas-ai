@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useRef } from 'react';
+import { Search } from 'lucide-react';
 import mapboxgl from 'mapbox-gl';
 
 import { geocodePlace, getHighlightFeature } from '../lib/api';
@@ -19,9 +20,13 @@ interface MapCanvasProps {
 function createMarkerElement(active: boolean, label: string) {
   const element = document.createElement('button');
   element.type = 'button';
-  element.className = `facility-marker ${active ? 'is-active' : ''}`;
+  element.className = active
+    ? 'facility-marker relative h-7 w-7 border-0 bg-transparent'
+    : 'facility-marker relative h-7 w-7 border-0 bg-transparent';
   element.setAttribute('aria-label', label);
-  element.innerHTML = '<span class="facility-marker__halo"></span><span class="facility-marker__dot"></span>';
+  element.innerHTML = active
+    ? '<span class="facility-marker__halo absolute inset-0 rounded-full bg-surface-teal"></span><span class="facility-marker__dot absolute inset-[3px] rounded-full border-[3px] border-white/95 bg-[linear-gradient(180deg,#4f8df7,#2d6ce6)] shadow-[0_10px_18px_rgba(15,97,82,0.25)]"></span>'
+    : '<span class="facility-marker__halo absolute inset-0 rounded-full bg-surface-teal"></span><span class="facility-marker__dot absolute inset-[5px] rounded-full border-[3px] border-white/95 bg-[linear-gradient(180deg,#22c7a7,#0d9f83)] shadow-[0_10px_18px_rgba(15,97,82,0.25)]"></span>';
   return element;
 }
 
@@ -122,7 +127,26 @@ export function MapCanvas({
     map.on('moveend', syncViewport);
     mapRef.current = map;
 
+    const firstResizeId = window.requestAnimationFrame(() => {
+      map.resize();
+    });
+
+    const secondResizeId = window.setTimeout(() => {
+      map.resize();
+      syncViewport();
+    }, 180);
+
+    const handleWindowResize = () => {
+      map.resize();
+      syncViewport();
+    };
+
+    window.addEventListener('resize', handleWindowResize);
+
     return () => {
+      window.cancelAnimationFrame(firstResizeId);
+      window.clearTimeout(secondResizeId);
+      window.removeEventListener('resize', handleWindowResize);
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
       map.remove();
@@ -249,12 +273,15 @@ export function MapCanvas({
   }, [filters.city, filters.region]);
 
   return (
-    <section className="map-shell">
+    <section className="relative h-screen min-h-[100svh] w-full overflow-hidden">
       {MAPBOX_TOKEN ? (
-        <div ref={mapNodeRef} className="map-surface" />
+        <div
+          ref={mapNodeRef}
+          className="absolute inset-0 h-full w-full min-h-full min-w-full animate-map-in"
+        />
       ) : (
-        <div className="map-fallback">
-          <strong>Mapbox token missing</strong>
+        <div className="absolute inset-0 grid gap-2 rounded-panel bg-surface-panel p-6 text-ink-600 shadow-inset-soft">
+          <strong className="text-ink-900">Mapbox token missing</strong>
           <p>
             Add `MAPBOX_TOKEN` or `VITE_MAPBOX_TOKEN` in `frontend/.env` to render the
             interactive Ghana map.
@@ -262,17 +289,24 @@ export function MapCanvas({
         </div>
       )}
 
-      <div className="map-overlay">
-        <div className="map-overlay__label">Focused map</div>
-        <strong>{filters.city || filters.region || 'Ghana'}</strong>
-        <span>
+      <div className="absolute bottom-8 right-7 z-[12] grid max-w-[270px] gap-1 rounded-pill bg-white/88 px-5 py-4.5 shadow-overlay backdrop-blur-[12px] max-[920px]:hidden">
+        <div className="text-overline uppercase tracking-[0.14em] text-accent-600">Focused map</div>
+        <strong className="text-[1.12rem] text-ink-900">{filters.city || filters.region || 'Ghana'}</strong>
+        <span className="text-ui text-ink-600">
           {filters.region
             ? `Pins show ${facilities.length} healthcare profiles in the current view.`
             : 'Select a region to load facilities and place markers.'}
         </span>
       </div>
 
-      <div className="map-watermark">{formatLabel(filters.city || filters.region || 'Ghana')}</div>
+      <div className="pointer-events-none absolute right-9 top-[120px] z-[5] max-[920px]:hidden">
+        <div className="flex items-center justify-end gap-4 text-[rgba(25,47,77,0.08)]">
+          <div className="text-right text-[clamp(3rem,8vw,7rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.06em]">
+            {formatLabel(filters.city || filters.region || 'Ghana')}
+          </div>
+          <Search className="size-16 shrink-0" strokeWidth={1.5} />
+        </div>
+      </div>
     </section>
   );
 }
