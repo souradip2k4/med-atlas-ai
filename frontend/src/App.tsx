@@ -1,121 +1,161 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { Suspense, lazy, startTransition } from 'react';
+import { useQuery } from '@tanstack/react-query';
+
+import { FacilityDetailsPanel } from './components/FacilityDetailsPanel';
+import { ResultsSidebar } from './components/ResultsSidebar';
+import { TopSearchBar } from './components/TopSearchBar';
+import { fetchFacilityProfile, fetchMapMetadata, searchFacilities } from './lib/api';
+import { buildSearchPayload } from './lib/format';
+import { useDebouncedValue } from './lib/hooks';
+import { useUIStore } from './store/ui-store';
+import './App.css';
+
+const MapCanvas = lazy(async () => {
+  const module = await import('./components/MapCanvas');
+  return { default: module.MapCanvas };
+});
 
 function App() {
-  const [count, setCount] = useState(0)
+  const {
+    activeDropdown,
+    advancedOpen,
+    filters,
+    hoveredFacilityId,
+    selectedFacilityId,
+    viewportBbox,
+    resetFilters,
+    setActiveDropdown,
+    setAdvancedOpen,
+    setCity,
+    setHoveredFacilityId,
+    setRegion,
+    setSelectedFacilityId,
+    setViewportBbox,
+    setAdvancedFilter,
+    clearSpecialties,
+    toggleAffiliation,
+    toggleSpecialty,
+  } = useUIStore();
+
+  const debouncedBbox = useDebouncedValue(viewportBbox, 450);
+
+  const metadataQuery = useQuery({
+    queryKey: ['map-metadata'],
+    queryFn: fetchMapMetadata,
+    staleTime: 1000 * 60 * 30,
+  });
+
+  const searchPayload = buildSearchPayload(filters, filters.region ? debouncedBbox : null);
+
+  const searchQuery = useQuery({
+    queryKey: ['map-search', searchPayload],
+    queryFn: () => searchFacilities(searchPayload),
+    enabled: Boolean(filters.region),
+    staleTime: 1000 * 20,
+  });
+
+  const facilityQuery = useQuery({
+    queryKey: ['facility-profile', selectedFacilityId],
+    queryFn: () => fetchFacilityProfile(selectedFacilityId as string),
+    enabled: Boolean(selectedFacilityId),
+  });
+
+  const facilities = searchQuery.data?.facilities ?? [];
+  const resultCount = searchQuery.data?.count ?? 0;
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
+    <div className="app-shell">
+      <div className="app-backdrop" />
+
+      <ResultsSidebar
+        metadata={metadataQuery.data}
+        filters={filters}
+        facilities={facilities}
+        count={resultCount}
+        isLoading={searchQuery.isLoading || searchQuery.isFetching}
+        isError={searchQuery.isError}
+        errorMessage={
+          searchQuery.error instanceof Error
+            ? searchQuery.error.message
+            : 'Search failed for the current map view.'
+        }
+        advancedOpen={advancedOpen}
+        selectedFacilityId={selectedFacilityId}
+        hoveredFacilityId={hoveredFacilityId}
+        onAdvancedToggle={() => setAdvancedOpen(!advancedOpen)}
+        onAdvancedFilterChange={setAdvancedFilter}
+        onAffiliationToggle={toggleAffiliation}
+        onFacilitySelect={(facilityId) => {
+          startTransition(() => {
+            setSelectedFacilityId(facilityId);
+          });
+        }}
+        onFacilityHover={setHoveredFacilityId}
+        onClearSearch={resetFilters}
+      />
+
+      <main className="workspace">
+        <TopSearchBar
+          metadata={metadataQuery.data}
+          filters={filters}
+          activeDropdown={activeDropdown}
+          onDropdownChange={setActiveDropdown}
+          onRegionSelect={(region) => {
+            startTransition(() => {
+              setRegion(region);
+            });
+          }}
+          onCitySelect={(city) => {
+            startTransition(() => {
+              setCity(city);
+            });
+          }}
+          onToggleSpecialty={toggleSpecialty}
+          onClearRegion={resetFilters}
+          onClearCity={() => setCity('')}
+          onClearSpecialties={clearSpecialties}
+        />
+
+        <Suspense
+          fallback={
+            <section className="map-shell">
+              <div className="map-fallback">
+                <strong>Preparing the Ghana map</strong>
+                <p>Loading the interactive map workspace and the current healthcare overlays.</p>
+              </div>
+            </section>
+          }
         >
-          Count is {count}
-        </button>
-      </section>
+          <MapCanvas
+            filters={filters}
+            facilities={facilities}
+            selectedFacility={facilityQuery.data}
+            selectedFacilityId={selectedFacilityId}
+            hoveredFacilityId={hoveredFacilityId}
+            onViewportChange={setViewportBbox}
+            onFacilitySelect={(facilityId) => {
+              startTransition(() => {
+                setSelectedFacilityId(facilityId);
+              });
+            }}
+          />
+        </Suspense>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+        <FacilityDetailsPanel
+          profile={facilityQuery.data}
+          selectedFacilityId={selectedFacilityId}
+          isLoading={facilityQuery.isLoading || facilityQuery.isFetching}
+          isError={facilityQuery.isError}
+          errorMessage={
+            facilityQuery.error instanceof Error
+              ? facilityQuery.error.message
+              : 'The facility profile could not be loaded.'
+          }
+          onClose={() => setSelectedFacilityId(null)}
+        />
+      </main>
+    </div>
+  );
 }
 
-export default App
+export default App;
