@@ -1,11 +1,24 @@
 import type { ReactNode } from 'react';
-import { Globe, MapPin, Mail, Phone, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import {
+  Building2,
+  ChevronRight,
+  Globe,
+  HeartPulse,
+  Mail,
+  MapPin,
+  Phone,
+  Stethoscope,
+  Users,
+  X,
+} from 'lucide-react';
 
 import { formatLabel, getAddressLines } from '../lib/format';
-import type { FacilityProfile } from '../lib/types';
+import type { FacilityProfile, FacilitySummary } from '../lib/types';
 
 interface FacilityDetailsPanelProps {
   profile: FacilityProfile | null | undefined;
+  preview: FacilitySummary | null;
   selectedFacilityId: string | null;
   isLoading: boolean;
   isError: boolean;
@@ -13,50 +26,99 @@ interface FacilityDetailsPanelProps {
   onClose: () => void;
 }
 
-function Section({
+function DetailSection({
+  icon: Icon,
   title,
   children,
 }: {
+  icon: LucideIcon;
   title: string;
   children: ReactNode;
 }) {
   return (
-    <section className="mt-4.5 first:mt-0">
-      <h3 className="mb-3 text-base text-ink-900">{title}</h3>
+    <section className="mt-7 border-t border-t-border-header pt-7 first:mt-0 first:border-t-0 first:pt-0">
+      <div className="mb-4 flex items-center gap-3">
+        <Icon className="size-5 text-ink-700" strokeWidth={1.9} />
+        <h3 className="text-[1.12rem] font-semibold text-[#182735]">{title}</h3>
+      </div>
       {children}
     </section>
   );
 }
 
-function InlineList({
-  title,
-  values,
-}: {
-  title: string;
-  values: string[] | null;
-}) {
-  if (!values || values.length === 0) {
-    return null;
-  }
-
+function ArrowList({ items }: { items: string[] }) {
   return (
-    <Section title={title}>
-      <div className="flex flex-wrap gap-2">
-        {values.map((item) => (
-          <span
-            className="rounded-full bg-surface-panel-strong px-3 py-2 text-ink-700 shadow-inset-soft"
-            key={item}
-          >
-            {formatLabel(item)}
-          </span>
-        ))}
+    <ul className="grid gap-3">
+      {items.map((item) => (
+        <li key={item} className="flex items-start gap-3 text-[1.02rem] leading-8 text-[#23384f]">
+          <ChevronRight className="mt-1 size-4 shrink-0 text-accent-600" strokeWidth={2.4} />
+          <span>{formatLabel(item)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MetaRow({
+  icon: Icon,
+  children,
+}: {
+  icon: LucideIcon;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-3 flex items-start gap-3 first:mt-0">
+      <Icon className="mt-0.5 size-[18px] shrink-0 text-accent-600" />
+      <div className="text-[1rem] leading-7 text-[#334c66]">{children}</div>
+    </div>
+  );
+}
+
+function DetailSkeleton() {
+  return (
+    <div className="overflow-auto bg-white px-7 pb-8 pt-6">
+      <div className="rounded-[28px] border border-[rgba(191,214,244,0.95)] bg-[linear-gradient(180deg,#fbfdff_0%,#f7fbff_100%)] p-5 shadow-[inset_0_0_0_1px_rgba(236,242,252,0.92)]">
+        <div className="mb-5 flex gap-2.5">
+          <div className="skeleton-block h-10 w-28 rounded-full" />
+          <div className="skeleton-block h-10 w-24 rounded-full" />
+        </div>
+        <div className="grid gap-3">
+          <div className="skeleton-block h-4.5 w-full rounded-full" />
+          <div className="skeleton-block h-4.5 w-[90%] rounded-full" />
+          <div className="skeleton-block h-4.5 w-[78%] rounded-full" />
+        </div>
       </div>
-    </Section>
+
+      <div className="mt-7 border-t border-t-border-header pt-7">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="skeleton-block h-5 w-5 rounded-full" />
+          <div className="skeleton-block h-6 w-28 rounded-full" />
+        </div>
+        <div className="grid gap-3">
+          <div className="skeleton-block h-4.5 w-full rounded-full" />
+          <div className="skeleton-block h-4.5 w-[92%] rounded-full" />
+          <div className="skeleton-block h-4.5 w-[68%] rounded-full" />
+        </div>
+      </div>
+
+      <div className="mt-7 border-t border-t-border-header pt-7">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="skeleton-block h-5 w-5 rounded-full" />
+          <div className="skeleton-block h-6 w-24 rounded-full" />
+        </div>
+        <div className="grid gap-3">
+          <div className="skeleton-block h-11 w-[86%] rounded-full" />
+          <div className="skeleton-block h-11 w-[58%] rounded-full" />
+          <div className="skeleton-block h-11 w-[74%] rounded-full" />
+        </div>
+      </div>
+    </div>
   );
 }
 
 export function FacilityDetailsPanel({
   profile,
+  preview,
   selectedFacilityId,
   isLoading,
   isError,
@@ -67,141 +129,183 @@ export function FacilityDetailsPanel({
     return null;
   }
 
+  const displayName = profile?.facility_name ?? preview?.facility_name ?? 'Loading facility details';
+  const facilityType = formatLabel(profile?.facility_type ?? preview?.facility_type) || 'Facility';
+  const operatorType = formatLabel(profile?.operator_type ?? preview?.operator_type);
+  const description =
+    profile?.description ??
+    preview?.description ??
+    'Detailed profile loaded. Fields without verified values are hidden to keep this view clean.';
+
   const addressLines = profile ? getAddressLines(profile) : [];
   const locationParts = profile
     ? [profile.city, profile.state, profile.country].filter(
         (item): item is string => Boolean(item),
       )
-    : [];
+    : [preview?.city, preview?.state].filter((item): item is string => Boolean(item));
+
+  const overviewParts = [profile?.description, profile?.mission_statement]
+    .filter((item): item is string => Boolean(item && item.trim()));
+
+  const operationalRows = [
+    profile?.capacity ? { label: 'Capacity', value: String(profile.capacity) } : null,
+    profile?.no_doctors ? { label: 'Doctors', value: String(profile.no_doctors) } : null,
+    profile?.year_established
+      ? { label: 'Established', value: String(profile.year_established) }
+      : null,
+  ].filter((item): item is { label: string; value: string } => Boolean(item));
 
   return (
-    <aside className="absolute right-7 top-[118px] z-[28] grid max-h-[calc(100dvh-148px)] w-[min(430px,calc(100%-56px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[32px] border border-border-white-soft bg-surface-card shadow-panel-strong backdrop-blur-[18px] animate-panel-in max-[920px]:bottom-3 max-[920px]:right-3 max-[920px]:top-auto max-[920px]:max-h-[55dvh] max-[920px]:w-[calc(100%-24px)]">
-      <div className="flex items-start gap-3.5 border-b border-b-border-header px-[22px] pb-4 pt-[22px]">
+    <aside className="absolute right-6 top-[118px] z-[28] grid max-h-[calc(100dvh-146px)] w-[min(540px,calc(100%-48px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[30px] border border-border-white-soft bg-white shadow-panel-strong backdrop-blur-[18px] animate-panel-in max-[920px]:bottom-3 max-[920px]:right-3 max-[920px]:top-auto max-[920px]:max-h-[58dvh] max-[920px]:w-[calc(100%-24px)]">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-4 border-b border-b-border-header bg-white px-3 pb-4 pt-5 shadow-[0_10px_24px_rgba(20,39,71,0.06)]">
         <button
           type="button"
-          className="inline-flex size-9.5 shrink-0 items-center justify-center rounded-full border-0 bg-surface-filter text-ink-700"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-surface-filter text-ink-700"
           onClick={onClose}
         >
-          <X className="size-[18px]" />
+          <X className="size-[19px]" />
         </button>
-        <div>
-          <div className="mb-1.5 text-detail-badge uppercase tracking-[0.14em] text-accent-600">
+
+        <div className="min-w-0 pr-2">
+          <div className="text-detail-badge uppercase tracking-[0.18em] text-accent-600">
             Facility profile
           </div>
-          <h2 className="text-[1.9rem] leading-[1.04] text-ink-900">
-            {profile?.facility_name ?? 'Loading facility details'}
+          <h2 className="mt-1.5 break-words text-[1.06rem] leading-tight text-[#1b2a3a] font-semibold">
+            {displayName}
           </h2>
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="grid gap-2 rounded-panel bg-surface-panel p-6 text-ink-600 shadow-inset-soft">
-          <strong className="text-ink-900">Loading facility profile</strong>
-          <p>Fetching the full medical, contact, and location profile for this facility.</p>
-        </div>
-      ) : null}
+      {isLoading ? <DetailSkeleton /> : null}
 
       {isError ? (
-        <div className="grid gap-2 rounded-panel bg-surface-error p-6 text-ink-600 shadow-inset-soft">
+        <div className="grid gap-2 bg-white px-7 py-7 text-ink-600">
           <strong className="text-ink-900">Could not load this facility</strong>
           <p>{errorMessage}</p>
         </div>
       ) : null}
 
-      {!isLoading && !isError && profile ? (
-        <div className="overflow-auto px-[22px] pb-6 pt-5">
-          <div className="mb-4.5 rounded-pill bg-[linear-gradient(145deg,rgba(240,247,255,0.9),rgba(255,255,255,0.95))] p-4.5 shadow-inset-field">
-            <div>
-              <span className="inline-flex items-center rounded-full bg-surface-accent px-3 py-2 text-detail-badge font-bold uppercase tracking-[0.08em] text-accent-700">
-                {formatLabel(profile.facility_type) || 'Facility'}
+      {!isLoading && !isError && (profile || preview) ? (
+        <div className="overflow-auto bg-white px-7 pb-8 pt-6">
+          <div className="rounded-[28px] border border-[rgba(191,214,244,0.95)] bg-[linear-gradient(180deg,#fbfdff_0%,#f7fbff_100%)] p-5 shadow-[inset_0_0_0_1px_rgba(236,242,252,0.92)]">
+            <div className="mb-5 flex flex-wrap gap-3">
+              <span className="inline-flex items-center rounded-full bg-surface-accent px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-[0.12em] text-accent-700">
+                {facilityType}
               </span>
-              {profile.operator_type ? (
-                <span className="ml-2 inline-flex items-center rounded-full bg-surface-teal px-3 py-2 text-detail-badge font-bold uppercase tracking-[0.08em] text-tone-teal">
-                  {formatLabel(profile.operator_type)}
+              {operatorType ? (
+                <span className="inline-flex items-center rounded-full bg-surface-teal px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-[0.12em] text-tone-teal">
+                  {operatorType}
                 </span>
               ) : null}
             </div>
-            <p className="mt-3 text-ink-600">
-              {profile.description ||
-                'Detailed profile loaded. Fields without verified values are hidden to keep this view clean.'}
-            </p>
+            <p className="text-[1rem] leading-8 text-[#52708f]">{description}</p>
           </div>
 
-          <InlineList title="Specialties" values={profile.specialties} />
-          <InlineList title="Procedures" values={profile.procedures} />
-          <InlineList title="Equipment" values={profile.equipment} />
-          <InlineList title="Capabilities" values={profile.capabilities} />
+          <DetailSection icon={Globe} title="Overview">
+            <div className="grid gap-4 text-[1.02rem] leading-8 text-[#24384f]">
+              {(overviewParts.length > 0 ? overviewParts : [description]).map((item) => (
+                <p key={item}>{item}</p>
+              ))}
+            </div>
+          </DetailSection>
+
+          {profile?.specialties?.length ? (
+            <DetailSection icon={Stethoscope} title="Specialties">
+              <ArrowList items={profile.specialties} />
+            </DetailSection>
+          ) : null}
+
+          {profile?.procedures?.length ? (
+            <DetailSection icon={HeartPulse} title="Procedures">
+              <ArrowList items={profile.procedures} />
+            </DetailSection>
+          ) : null}
+
+          {profile?.equipment?.length ? (
+            <DetailSection icon={Building2} title="Equipment">
+              <ArrowList items={profile.equipment} />
+            </DetailSection>
+          ) : null}
+
+          {profile?.capabilities?.length ? (
+            <DetailSection icon={HeartPulse} title="Capabilities">
+              <ArrowList items={profile.capabilities} />
+            </DetailSection>
+          ) : null}
 
           {addressLines.length > 0 || locationParts.length > 0 ? (
-            <Section title="Location">
+            <DetailSection icon={MapPin} title="Location">
               {addressLines.length > 0 ? (
-                <div className="flex items-start gap-3 text-ink-700">
-                  <MapPin className="size-[18px] shrink-0 text-accent-600" />
+                <MetaRow icon={MapPin}>
                   <div>
                     {addressLines.map((line) => (
                       <div key={line}>{line}</div>
                     ))}
                     {locationParts.length > 0 ? <div>{locationParts.join(', ')}</div> : null}
                   </div>
-                </div>
-              ) : locationParts.length > 0 ? (
-                <div className="flex items-start gap-3 text-ink-700">
-                  <MapPin className="size-[18px] shrink-0 text-accent-600" />
-                  <div>{locationParts.join(', ')}</div>
-                </div>
-              ) : null}
-            </Section>
+                </MetaRow>
+              ) : (
+                <MetaRow icon={MapPin}>{locationParts.join(', ')}</MetaRow>
+              )}
+            </DetailSection>
           ) : null}
 
-          {profile.phone_numbers?.length || profile.email || profile.websites?.length ? (
-            <Section title="Contact">
+          {profile?.phone_numbers?.length || profile?.email || profile?.websites?.length ? (
+            <DetailSection icon={Phone} title="Contact">
               {profile.phone_numbers?.map((phone) => (
-                <div className="mt-2.5 flex items-start gap-3 text-ink-700 first:mt-0" key={phone}>
-                  <Phone className="size-[18px] shrink-0 text-accent-600" />
-                  <div>{phone}</div>
-                </div>
+                <MetaRow icon={Phone} key={phone}>
+                  {phone}
+                </MetaRow>
               ))}
-              {profile.email ? (
-                <div className="mt-2.5 flex items-start gap-3 text-ink-700">
-                  <Mail className="size-[18px] shrink-0 text-accent-600" />
-                  <div>{profile.email}</div>
-                </div>
-              ) : null}
+              {profile.email ? <MetaRow icon={Mail}>{profile.email}</MetaRow> : null}
               {profile.websites?.map((website) => (
-                <div className="mt-2.5 flex items-start gap-3 text-ink-700" key={website}>
-                  <Globe className="size-[18px] shrink-0 text-accent-600" />
-                  <div>{website}</div>
-                </div>
+                <MetaRow icon={Globe} key={website}>
+                  {website}
+                </MetaRow>
               ))}
-            </Section>
+            </DetailSection>
           ) : null}
 
-          {profile.affiliation_types?.length ? (
-            <Section title="Affiliations">
-              <div className="flex flex-wrap gap-2">
-                {profile.affiliation_types.map((item) => (
-                  <span
-                    className="rounded-full bg-surface-panel-strong px-3 py-2 text-ink-700 shadow-inset-soft"
-                    key={item}
+          {profile?.affiliation_types?.length ? (
+            <DetailSection icon={Building2} title="Affiliations">
+              <ArrowList items={profile.affiliation_types} />
+            </DetailSection>
+          ) : null}
+
+          {operationalRows.length > 0 ? (
+            <DetailSection icon={Users} title="Operational Details">
+              <div className="grid gap-3 text-[1rem] text-[#23384f]">
+                {operationalRows.map((row) => (
+                  <div
+                    key={row.label}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] gap-6 border-b border-b-border-header pb-3 last:border-b-0 last:pb-0"
                   >
-                    {formatLabel(item)}
-                  </span>
+                    <span className="text-[#5b7390]">{row.label}</span>
+                    <strong className="font-medium text-[#1b2a3a]">{row.value}</strong>
+                  </div>
                 ))}
               </div>
-            </Section>
+            </DetailSection>
           ) : null}
 
-          {profile.capacity || profile.no_doctors || profile.year_established ? (
-            <Section title="Operational details">
-              {profile.capacity ? <div className="text-ink-700">Capacity: {profile.capacity}</div> : null}
-              {profile.no_doctors ? (
-                <div className="text-ink-700">Doctors: {profile.no_doctors}</div>
-              ) : null}
-              {profile.year_established ? (
-                <div className="text-ink-700">Established: {profile.year_established}</div>
-              ) : null}
-            </Section>
-          ) : null}
+          {/* {profile?.created_at || profile?.updated_at ? (
+            <DetailSection icon={CalendarDays} title="Record Timeline">
+              <div className="grid gap-3 text-[1rem] text-[#23384f]">
+                {profile.created_at ? (
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-6 border-b border-b-border-header pb-3">
+                    <span className="text-[#5b7390]">Created</span>
+                    <strong className="font-medium text-[#1b2a3a]">{profile.created_at}</strong>
+                  </div>
+                ) : null}
+                {profile.updated_at ? (
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-6">
+                    <span className="text-[#5b7390]">Updated</span>
+                    <strong className="font-medium text-[#1b2a3a]">{profile.updated_at}</strong>
+                  </div>
+                ) : null}
+              </div>
+            </DetailSection>
+          ) : null} */}
         </div>
       ) : null}
     </aside>
