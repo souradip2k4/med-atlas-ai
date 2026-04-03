@@ -37,6 +37,7 @@ interface UIState {
     value: string,
   ) => void;
   toggleAffiliation: (value: string) => void;
+  resetAdvancedFilters: () => void;
   resetFilters: () => void;
 }
 
@@ -116,6 +117,17 @@ export const useUIStore = create<UIState>()(
             selectedFacilityId: null,
           };
         }),
+      resetAdvancedFilters: () =>
+        set((state) => ({
+          filters: {
+            ...state.filters,
+            facilityType: '',
+            operatorType: '',
+            organizationType: '',
+            affiliationTypes: [],
+          },
+          selectedFacilityId: null,
+        })),
       resetFilters: () =>
         set({
           activeDropdown: null,
