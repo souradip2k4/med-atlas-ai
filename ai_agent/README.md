@@ -32,21 +32,19 @@ Queries are intercepted by our LangChain agent (`agent.py`) and routed dynamical
 
 ## 🔬 2. The Medical Agent Engine (`setup_uc_function.sql`)
 
-This pure-SQL Unity Catalog function (`med_atlas_ai.default.analyze_medical_query`) handles complex anomaly detection and gap analysis. It contains 8 distinct logic branches:
+This pure-SQL Unity Catalog function (`med_atlas_ai.default.analyze_medical_query`) handles complex anomaly detection and gap analysis. It contains 6 distinct logic branches:
 
 | Branch | Check | Mechanism |
 |---|---|---|
-| **1. Reliability Scoring** | Data Quality | Starts at 100 points, issues deductions across 7 dimensions (Fact density, beds, doctors, capabilities). Generates user-friendly deduction logs. |
-| **2. Unmet Needs (Regional Gaps)** | Service Availability | Uses `ARRAY_EXCEPT` to find globally known medical specialties that are definitively missing from a specific region. Leaves free-text procedures/equipment to the LLM for semantic evaluation. |
-| **3. Duplicate Facilities** | Data Integrity | Identifies facilities with exact name matches clustered in the same region. |
-| **4. Anomaly Flagging** | Statistical Outliers | Applies 3-sigma (standard deviation) checks on capacity and doctor counts to flag extreme medical claims mathematically. |
-| **5. Feature Mismatch** | Plausibility | Calculates the ratio of claimed procedures to available equipment. Flagged for LLM review to diagnose overclaiming (e.g., claiming 15 procedures with 0 tracked tools). |
-| **6. NGO Overlap** | Effort Duplication | Identifies clusters of 2+ NGOs with the exact same mission/affiliation operating in the exact same city. |
-| **7. Problem Classification** | Systemic Failure | Filters for facilities missing entire core pillars (Specialties, Procedures, Equipment) and asks the LLM to diagnose `equipment_gap`, `service_gap`, etc. |
-| **8. Data Staleness** | Age verification | Classifies the `updated_at` timestamp as current, moderate, aging, or stale (1yr+). |
+| **1. Unmet Needs (Regional Gaps)** | Service Availability | Uses `ARRAY_EXCEPT` to find globally known medical specialties that are definitively missing from a specific region. Leaves free-text procedures/equipment to the LLM for semantic evaluation. |
+| **2. Duplicate Facilities** | Data Integrity | Identifies facilities with exact name matches clustered in the same region. |
+| **3. Anomaly Flagging** | Statistical Outliers | Applies 3-sigma (standard deviation) checks on capacity and doctor counts to flag extreme medical claims mathematically. |
+| **4. Feature Mismatch** | Plausibility | Calculates the ratio of claimed procedures to available equipment. Flagged for LLM review to diagnose overclaiming (e.g., claiming 15 procedures with 0 tracked tools). |
+| **5. NGO Overlap** | Effort Duplication | Identifies clusters of 2+ NGOs with the exact same mission/affiliation operating in the exact same city. |
+| **6. Problem Classification** | Systemic Failure | Filters for facilities missing entire core pillars (Specialties, Procedures, Equipment) and asks the LLM to diagnose `equipment_gap`, `service_gap`, etc. |
 
 ### 📍 Geospatial Payload Enrichment
-All relevant SQL branches (Reliability, Anomaly Flagging, Feature Mismatch, Problem Classification, and Staleness) explicitly return `facility_id`, `latitude`, and `longitude` in their JSON output. This allows the frontend map to immediately pan to and highlight any facility the LLM mentions in its analysis.
+All relevant SQL branches (Anomaly Flagging, Feature Mismatch, Problem Classification) explicitly return `facility_id`, `latitude`, and `longitude` in their JSON output. This allows the frontend map to immediately pan to and highlight any facility the LLM mentions in its analysis.
 
 ### ⚠️ The Missing Data Philosophy (NULL vs Zero)
 A major design pillar of the Medical Agent Engine is explicitly preventing the LLM from hallucinating anomalies due to scraped data gaps.

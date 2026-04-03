@@ -159,15 +159,13 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
     Uses the analyze_medical_query UC function on facility_records and
     facility_facts tables to detect data quality issues and anomalies.
 
-    Returns data for 8 analysis types:
-      1. reliability_score        — 0-100 data quality score based on fact density
-      2. regional_coverage        — per-region service coverage arrays for LLM gap analysis
-      3. duplicate_facility       — exact same facility name occurring multiple times
-      4. anomaly_flagging         — outlier capacity/doctor counts (3 std devs)
-      5. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
-      6. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
-      7. facility_profile_counts  — raw per-facility counts for LLM gap classification
-      8. data_staleness           — outdated records (updated_at age scoring)
+    Returns data for 6 analysis types:
+      1. regional_coverage        — per-region service coverage arrays for LLM gap analysis
+      2. duplicate_facility       — exact same facility name occurring multiple times
+      3. anomaly_flagging         — outlier capacity/doctor counts (3 std devs)
+      4. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
+      5. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
+      6. facility_profile_counts  — raw per-facility counts for LLM gap classification
 
     NOTE — For classification/breakdown queries (facility_type, operator_type, affiliation_types,
       ngo counts, public vs private breakdown) — use genie_chat_tool instead.
@@ -177,7 +175,7 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
       Contradictions/inconsistencies are handled dynamically via semantic search,
       not by this tool. Route 'contradict', 'inconsistent' queries to vector_search_tool.
 
-    IMPORTANT — For branches that return raw data (types 2, 4, 7, 8, 9), YOU must:
+    IMPORTANT — For branches that return raw data (types 1, 3, 6), YOU must:
       • Read the 'note' field in each finding and apply medical/domain reasoning
       • Classify NGO levels, identify service gaps, assess overlap, or classify gap types
       • Evaluate if procedure-to-equipment ratios are medically implausible
@@ -188,10 +186,9 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
       - Specialist distribution    → genie_chat_tool (queries regional_insights table directly)
       - Web/description quality    → genie_chat_tool (e.g., "which facilities have websites?")
 
-    Trigger keywords: "anomal", "inconsisten", "contradict", "reliab", "score",
-    "quality", "ngo", "classify", "gap", "unmet", "outlier", "flag",
-    "duplicate", "abnormal", "red flag", "problem type", "workforce",
-    "staffing", "overlapping", "staleness", "stale", "corrobor",
+    Trigger keywords: "anomal", "inconsisten", "contradict", "ngo", "classify",
+    "gap", "unmet", "outlier", "flag", "duplicate", "abnormal", "red flag", 
+    "problem type", "workforce", "staffing", "overlapping", "corrobor",
     "mismatch", "feature mismatch", "procedure count", "equipment count".
 
     NOT for: oversupply, scarcity, specialist distribution, web presence → use genie_chat_tool.
@@ -374,10 +371,9 @@ IS_SEMANTIC = True if ANY of these keywords appear:
   "contradict", "inconsisten", "conflicting", "conflict"
 
 IS_ANALYTIC = True if ANY of these keywords appear:
-  "anomal", "reliab", "score", "quality",
-  "gap", "unmet", "outlier", "flag",
+  "anomal", "gap", "unmet", "outlier", "flag",
   "duplicate", "abnormal", "red flag", "problem type", "workforce",
-  "staffing", "correlat", "overlapping", "staleness", "mismatch",
+  "staffing", "correlat", "overlapping", "mismatch",
   "feature mismatch", "procedure count", "equipment count", "signal"
 
 ### Step 2 — Route accordingly:
