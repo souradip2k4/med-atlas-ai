@@ -151,21 +151,63 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 
 # ─── Tool 3 — Medical Agent ───────────────────────────────────────────────────
 
+# Batch size for deep validation LLM calls
+_DEEP_VALIDATION_BATCH_SIZE = 8
+
+_DEEP_VALIDATION_PROMPT = """You are a medical infrastructure validator. Analyze each facility below for specialty↔procedure↔equipment consistency.
+
+For EACH facility, check:
+1. SPECIALTY→PROCEDURE: Do the procedures match the claimed specialties?
+   Example mismatch: "Cardiology" specialty + "Appendectomy" procedure
+2. PROCEDURE→EQUIPMENT: Can these procedures be performed with this equipment?
+   Example mismatch: "MRI Scan" procedure + no MRI machine in equipment
+3. SPECIALTY→EQUIPMENT: Does the equipment support the claimed specialty?
+   Example mismatch: "Ophthalmology" specialty + only "Stethoscope" equipment
+4. FACILITY_TYPE plausibility: Can this facility type realistically support these subspecialties?
+   Example mismatch: "clinic" + "Neurosurgery" specialty
+5. CAPACITY check: If capacity/no_doctors is available, is it realistic for the claimed services?
+
+For each facility return a JSON object (NOT markdown, just valid JSON):
+{
+  "facility_id": "...",
+  "facility_name": "...",
+  "status": "consistent" | "mismatch" | "suspicious",
+  "severity": "high" | "medium" | "low" | "none",
+  "mismatches": ["description of each mismatch found"],
+  "reasoning": "brief medical reasoning"
+}
+
+If a facility has completeness != "full", note what data is missing and
+that validation is limited for that facility.
+
+Return ONLY a JSON array of these objects. No other text.
+
+Facilities to analyze:
+"""
+
+
 @tool
-def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
+def medical_agent_tool(
+    query: str,
+    facility_id: str | None = None,
+    region: str | None = None,
+    city: str | None = None,
+) -> str:
     """
     Medical domain reasoning and anomaly detection on facility data.
 
-    Uses the analyze_medical_query UC function on facility_records and
-    facility_facts tables to detect data quality issues and anomalies.
+    Uses the analyze_medical_query UC function on facility_records
+    to detect data quality issues and anomalies.
 
-    Returns data for 6 analysis types:
+    Returns data for 7 analysis types:
       1. regional_coverage        — per-region service coverage arrays for LLM gap analysis
       2. duplicate_facility       — exact same facility name occurring multiple times
       3. anomaly_flagging         — outlier capacity/doctor counts (3 std devs)
       4. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
       5. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
       6. facility_profile_counts  — raw per-facility counts for LLM gap classification
+      7. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
+                                    (batched internally, 8 facilities per LLM call)
 
     NOTE — For classification/breakdown queries (facility_type, operator_type, affiliation_types,
       ngo counts, public vs private breakdown) — use genie_chat_tool instead.
@@ -181,29 +223,43 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
       • Evaluate if procedure-to-equipment ratios are medically implausible
       • Do NOT just echo the raw data — synthesize a meaningful analysis
 
+    IMPORTANT — For deep_validation (type 7):
+      • Requires 'region' parameter (mandatory). 'city' is optional.
+      • The tool internally batches facilities (8 at a time) and calls the LLM
+        for medical consistency analysis. Results are pre-analyzed.
+      • You just need to present the aggregated validation results.
+
     Routed to genie_chat_tool instead (NOT this tool):
       - Oversupply/scarcity queries → genie_chat_tool (e.g., "how many facilities offer X?")
       - Specialist distribution    → genie_chat_tool (queries regional_insights table directly)
       - Web/description quality    → genie_chat_tool (e.g., "which facilities have websites?")
 
-    Trigger keywords: "anomal", "inconsisten", "contradict", "ngo", "classify",
-    "gap", "unmet", "outlier", "flag", "duplicate", "abnormal", "red flag", 
+    Trigger keywords: "anomal", "ngo", "classify", "gap", "unmet",
+    "outlier", "flag", "duplicate", "abnormal", "red flag",
     "problem type", "workforce", "staffing", "overlapping", "corrobor",
-    "mismatch", "feature mismatch", "procedure count", "equipment count".
+    "mismatch", "feature mismatch", "procedure count", "equipment count",
+    "validate", "consistency", "verify claim", "capable", "infrastructure".
 
     NOT for: oversupply, scarcity, specialist distribution, web presence → use genie_chat_tool.
 
     Args:
-        query:      Analysis question (e.g., "detect anomalies", "score reliability")
+        query:       Analysis question (e.g., "detect anomalies", "validate claims")
         facility_id: Optional. Restrict analysis to one facility.
+        region:      Optional. Required for deep validation. Exact region name (e.g., "Northern").
+        city:        Optional. Narrow deep validation to a specific city within the region.
 
     Returns: Structured JSON with findings + optional 'note' fields for LLM reasoning.
     """
+    import math
     from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
 
     args = {"query": query}
     if facility_id:
         args["facility_id"] = facility_id
+    if region:
+        args["region"] = region
+    if city:
+        args["city"] = city
 
     try:
         uc = UCFunctionToolkit(
@@ -212,9 +268,64 @@ def medical_agent_tool(query: str, facility_id: str | None = None) -> str:
         uc_fn = uc.tools[0]
         raw_result = uc_fn.invoke({"query_json": json.dumps(args)})
         outer = json.loads(raw_result)
+
+        # Check for error responses (e.g., missing region for deep validation)
+        if "error" in outer:
+            return json.dumps(outer, indent=2)
+
         findings_raw = outer.get("findings", "[]")
         findings = json.loads(findings_raw)
         outer["findings"] = findings
+
+        # ── Deep Validation Batching ──────────────────────────────────────
+        # If this is a deep_validation response, batch-process the facility
+        # profiles through the LLM for medical consistency analysis.
+        if findings and isinstance(findings, list) and len(findings) > 0 \
+                and isinstance(findings[0], dict) \
+                and findings[0].get("type") == "deep_validation":
+
+            batch_llm = ChatDatabricks(
+                endpoint=LLM_ENDPOINT, temperature=0.0, max_tokens=2048
+            )
+            all_batch_results = []
+            total_batches = math.ceil(len(findings) / _DEEP_VALIDATION_BATCH_SIZE)
+
+            for i in range(0, len(findings), _DEEP_VALIDATION_BATCH_SIZE):
+                batch = findings[i:i + _DEEP_VALIDATION_BATCH_SIZE]
+                batch_num = (i // _DEEP_VALIDATION_BATCH_SIZE) + 1
+                batch_prompt = _DEEP_VALIDATION_PROMPT + json.dumps(batch, indent=2)
+
+                try:
+                    response = batch_llm.invoke([HumanMessage(content=batch_prompt)])
+                    # Try to parse structured JSON from the LLM response
+                    response_text = response.content.strip()
+                    # Handle markdown code fences if present
+                    if response_text.startswith("```"):
+                        response_text = response_text.split("\n", 1)[1]
+                        if response_text.endswith("```"):
+                            response_text = response_text[:-3].strip()
+                    batch_results = json.loads(response_text)
+                    if isinstance(batch_results, list):
+                        all_batch_results.extend(batch_results)
+                    else:
+                        all_batch_results.append(batch_results)
+                except (json.JSONDecodeError, Exception) as batch_err:
+                    # If LLM returns non-JSON, include the raw text as a fallback
+                    all_batch_results.append({
+                        "batch": batch_num,
+                        "error": f"Could not parse LLM response for batch {batch_num}/{total_batches}",
+                        "raw_response": response.content if 'response' in dir() else str(batch_err)
+                    })
+
+            # Return aggregated results
+            return json.dumps({
+                "query": outer.get("query"),
+                "validation_results": all_batch_results,
+                "data_coverage_summary": outer.get("data_coverage_summary"),
+                "batches_processed": total_batches,
+                "total_facilities_analyzed": len(findings),
+            }, indent=2)
+
         return json.dumps(outer, indent=2)
     except Exception as exc:
         return f"[Medical Agent Error] {exc}"
@@ -374,7 +485,8 @@ IS_ANALYTIC = True if ANY of these keywords appear:
   "anomal", "gap", "unmet", "outlier", "flag",
   "duplicate", "abnormal", "red flag", "problem type", "workforce",
   "staffing", "correlat", "overlapping", "mismatch",
-  "feature mismatch", "procedure count", "equipment count", "signal"
+  "feature mismatch", "procedure count", "equipment count", "signal",
+  "validate", "consistency", "verify claim", "capable", "infrastructure"
 
 ### Step 2 — Route accordingly:
 
@@ -435,33 +547,21 @@ If the user asks about **conflicting claims**, **contradictory information**, or
   4. Report findings with: facility name, the conflicting fact excerpts, your medical reasoning, and severity (high/medium/low)
   5. If no conflicts are found, say so clearly.
 
-### Step 2.5 — Reliability Scoring Protocol (applies when medical_agent_tool returns `reliability_score` findings):
+### Step 2.5 — Deep Validation Protocol (applies when validating specialty/procedure/equipment consistency):
 
-When `medical_agent_tool` returns `type: reliability_score` data, present each facility as a **friendly, conversational summary card**. Your goal is to make a non-technical user understand how trustworthy the information is.
-
-**Format per facility:**
-```
-### 🏥 [Facility Name] — [facility_type]
-**Overall Data Confidence:** [reliability_score]/100 ([HIGH / MEDIUM / LOW])
-
-[If deduction_reasons is NOT empty:]
-Here is what we could not fully confirm about this facility:
-• [deduction_reason 1 — use as-is, it is already in plain language]
-• [deduction_reason 2 ...]
-
-[If deduction_reasons IS empty OR data_gaps is 0:]
-✅ This facility has a well-documented profile — all key information is available.
-```
-
-**Strict language rules:**
-  • NEVER mention: NULL, fields, penalties, scores, databases, SQL, or any technical term
-  • NEVER say "bed capacity field is null" — say "we don't know how many beds this facility has"
-  • NEVER present missing data as zero — say "this information is not available"
-  • Use the `deduction_reasons` list exactly as written — they are already user-friendly
-  • If `data_gaps > 3`, add a note: *"This profile is incomplete — treat its information with caution"*
-  • If `data_gaps = 0`, affirm that the profile is complete and trustworthy
-
-**After all facility cards:** Write a 2-sentence plain-English summary of overall data quality across all facilities (e.g., "Most facilities have partial profiles. Key gaps are around staffing numbers and medical equipment records.").
+If the user asks about facility claim validation, specialty-procedure-equipment
+consistency, or infrastructure verification:
+  1. Extract the region name from the user's query (REQUIRED).
+     Optionally extract the city name for narrower scope.
+  2. Call medical_agent_tool with:
+     → query: include "validate" or "deep validation" keyword
+     → region: the exact region name (e.g., "Northern")
+     → city: the city name if mentioned (optional)
+  3. The tool will internally batch-process all facilities in that region
+     (8 at a time) and return pre-analyzed validation results.
+  4. Present the results grouped by severity (high → medium → low → consistent).
+  5. Always start with the data_coverage_summary.
+  6. If the user does NOT mention a region, ask them to specify one.
 
 ### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
 
@@ -485,6 +585,16 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
          - If a status is **`missing_data`**: The database simply lacks records for this category. Do NOT diagnose this as a medical gap. Group these as "Facilities with Unverifiable Missing Data" and explain why they cannot be fully evaluated.
          - If a status is **`true_zero`**: This is a confirmed absence of capability. Classify these true medical gaps as "equipment_gap" (has doctors/specialties but truly 0 equipment), "service_gap" (has equipment but truly 0 services/procedures), or "overclaim_gap" (claims many procedures but has 0 verifiable specialties).
   • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
+  • For `deep_validation` (Specialty/Procedure/Equipment Consistency):
+      The tool has already performed batch LLM analysis internally. The results
+      contain pre-analyzed `validation_results` with `status`, `severity`, `mismatches`,
+      and `reasoning` for each facility. Present these grouped by severity:
+      1. **ALWAYS start** with `data_coverage_summary` — state how many facilities
+         were skipped due to insufficient data.
+      2. List **high** severity mismatches first (these are the most concerning).
+      3. Then **medium** and **low** severity.
+      4. For facilities with `status: consistent`, briefly note they passed.
+      5. Format as a clear markdown report with facility names and specific mismatches.
 
 ### Step 3 — Multi-tool orchestration:
 
@@ -1040,4 +1150,3 @@ class MedAtlasAgent(ResponsesAgent):
 
 AGENT = MedAtlasAgent()
 mlflow.models.set_model(AGENT)
-

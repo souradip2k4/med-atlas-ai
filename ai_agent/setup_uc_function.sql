@@ -414,7 +414,7 @@ THEN (
     WHERE organization_type = 'facility'
   ),
 
-  -- Step 2: count facts per facility and check if the field itself is NULL
+  -- Step 2: count array sizes per facility and check if the field itself is NULL
   gap_analysis AS (
     SELECT
       fr.facility_id,
@@ -428,14 +428,14 @@ THEN (
       COALESCE(CAST(fr.capacity AS INT), 0) AS capacity,
       COALESCE(CAST(fr.no_doctors AS INT), 0) AS no_doctors,
 
-      (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff WHERE ff.facility_id = fr.facility_id AND ff.fact_type = 'equipment') AS n_equip,
-      fr.equipment IS NULL AS equipment_missing,
+      COALESCE(size(fr.equipment), 0)   AS n_equip,
+      fr.equipment IS NULL              AS equipment_missing,
 
-      (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff WHERE ff.facility_id = fr.facility_id AND ff.fact_type = 'specialty') AS n_specialties,
-      fr.specialties IS NULL AS specialties_missing,
+      COALESCE(size(fr.specialties), 0) AS n_specialties,
+      fr.specialties IS NULL            AS specialties_missing,
 
-      (SELECT COUNT(*) FROM med_atlas_ai.default.facility_facts ff WHERE ff.facility_id = fr.facility_id AND ff.fact_type = 'procedure') AS n_procedures,
-      fr.procedures IS NULL AS procedures_missing
+      COALESCE(size(fr.procedures), 0)  AS n_procedures,
+      fr.procedures IS NULL             AS procedures_missing
     FROM med_atlas_ai.default.facility_records fr
     WHERE organization_type = 'facility'
   ),
@@ -497,6 +497,123 @@ THEN (
   FROM flagged_facilities
 )
 
+-- Branch 7. Deep Validation (Specialty↔Procedure↔Equipment Consistency)
+-- Region-scoped. Returns full facility profiles for Python-level batched LLM analysis.
+-- Skips facilities where fewer than 2 of the 3 medical arrays have data.
+WHEN LOWER(parse_json(query_json):query) RLIKE 'deep valid|validate|consistency|specialty.*match|verify claim|claim.*valid|services.*match|infrastr|capable'
+THEN
+  CASE
+    -- Guard: require region
+    WHEN parse_json(query_json):region IS NULL
+    THEN to_json(
+      map_from_arrays(
+        array('query', 'error'),
+        array(
+          parse_json(query_json):query,
+          'Deep validation requires a region scope to limit processing. Please specify a region (e.g., "Northern", "Greater Accra Region").'
+        )
+      )
+    )
+    ELSE (
+      WITH
+      -- Step 1: count facilities in scope and their data completeness
+      data_context AS (
+        SELECT
+          COUNT(*) AS total_in_scope,
+          SUM(CASE WHEN (
+            (CASE WHEN specialties IS NOT NULL AND size(specialties) > 0 THEN 1 ELSE 0 END) +
+            (CASE WHEN procedures  IS NOT NULL AND size(procedures)  > 0 THEN 1 ELSE 0 END) +
+            (CASE WHEN equipment   IS NOT NULL AND size(equipment)   > 0 THEN 1 ELSE 0 END)
+          ) >= 2 THEN 1 ELSE 0 END) AS validatable,
+          SUM(CASE WHEN (
+            (CASE WHEN specialties IS NOT NULL AND size(specialties) > 0 THEN 1 ELSE 0 END) +
+            (CASE WHEN procedures  IS NOT NULL AND size(procedures)  > 0 THEN 1 ELSE 0 END) +
+            (CASE WHEN equipment   IS NOT NULL AND size(equipment)   > 0 THEN 1 ELSE 0 END)
+          ) < 2 THEN 1 ELSE 0 END) AS skipped_insufficient_data
+        FROM med_atlas_ai.default.facility_records
+        WHERE organization_type = 'facility'
+          AND state = CAST(parse_json(query_json):region AS STRING)
+      ),
+
+      -- Step 2: extract full profiles for facilities with at least 2 non-empty arrays
+      profiles AS (
+        SELECT
+          fr.facility_id,
+          fr.facility_name,
+          COALESCE(fr.facility_type, 'unknown') AS facility_type,
+          fr.latitude,
+          fr.longitude,
+          ARRAY_JOIN(COALESCE(fr.specialties, ARRAY()), ', ') AS specialties_str,
+          ARRAY_JOIN(COALESCE(fr.procedures, ARRAY()), ', ')  AS procedures_str,
+          ARRAY_JOIN(COALESCE(fr.equipment, ARRAY()), ', ')   AS equipment_str,
+          CAST(fr.capacity AS STRING)   AS capacity,
+          CAST(fr.no_doctors AS STRING) AS no_doctors,
+          CASE
+            WHEN fr.specialties IS NOT NULL AND size(fr.specialties) > 0
+              AND fr.procedures  IS NOT NULL AND size(fr.procedures)  > 0
+              AND fr.equipment   IS NOT NULL AND size(fr.equipment)   > 0
+            THEN 'full'
+            WHEN fr.equipment IS NULL OR size(COALESCE(fr.equipment, ARRAY())) = 0
+            THEN 'partial_no_equipment'
+            WHEN fr.procedures IS NULL OR size(COALESCE(fr.procedures, ARRAY())) = 0
+            THEN 'partial_no_procedures'
+            WHEN fr.specialties IS NULL OR size(COALESCE(fr.specialties, ARRAY())) = 0
+            THEN 'partial_no_specialties'
+            ELSE 'full'
+          END AS completeness
+        FROM med_atlas_ai.default.facility_records fr
+        WHERE fr.organization_type = 'facility'
+          AND fr.state = CAST(parse_json(query_json):region AS STRING)
+          AND (
+            CAST(parse_json(query_json):city AS STRING) IS NULL
+            OR fr.city = CAST(parse_json(query_json):city AS STRING)
+          )
+          -- At least 2 of 3 medical arrays must have data
+          AND (
+            (CASE WHEN fr.specialties IS NOT NULL AND size(fr.specialties) > 0 THEN 1 ELSE 0 END) +
+            (CASE WHEN fr.procedures  IS NOT NULL AND size(fr.procedures)  > 0 THEN 1 ELSE 0 END) +
+            (CASE WHEN fr.equipment   IS NOT NULL AND size(fr.equipment)   > 0 THEN 1 ELSE 0 END)
+          ) >= 2
+      )
+
+      SELECT to_json(
+        map_from_arrays(
+          array('query', 'findings', 'data_coverage_summary'),
+          array(
+            parse_json(query_json):query,
+
+            COALESCE(
+              to_json(array_agg(named_struct(
+                'type',             'deep_validation',
+                'facility_id',      facility_id,
+                'facility_name',    facility_name,
+                'facility_type',    facility_type,
+                'latitude',         latitude,
+                'longitude',        longitude,
+                'specialties',      specialties_str,
+                'procedures',       procedures_str,
+                'equipment',        equipment_str,
+                'capacity',         capacity,
+                'no_doctors',       no_doctors,
+                'completeness',     completeness
+              ))),
+              '[]'
+            ),
+
+            (SELECT to_json(named_struct(
+              'region',                    CAST(parse_json(query_json):region AS STRING),
+              'total_facilities_in_region', total_in_scope,
+              'validatable_facilities',     validatable,
+              'skipped_insufficient_data',  skipped_insufficient_data,
+              'note', 'Start by stating that ' || skipped_insufficient_data || ' facilities in this region were skipped because they lack sufficient medical data (fewer than 2 of: specialties, procedures, equipment). Then present the validation results.'
+            )) FROM data_context)
+          )
+        )
+      )
+      FROM profiles
+    )
+  END
+
 -- Fallback
 ELSE to_json(
   map_from_arrays(
@@ -506,7 +623,7 @@ ELSE to_json(
       to_json(array(named_struct(
         'type', 'general',
         'message', 'Query recognized but no specific analysis triggered.',
-        'hint', 'Supported (6 branches): NGO classification/overlap, unmet needs/regional gaps, duplicate detection, outlier/anomaly flagging, feature mismatch, problem type/gap classification. For CONTRADICTIONS use vector_search_tool. For oversupply/scarcity/specialist distribution/web presence use genie_chat_tool.'
+        'hint', 'Supported (7 branches): unmet needs/regional gaps, duplicate detection, outlier/anomaly flagging, feature mismatch, NGO overlap, problem type/gap classification, deep validation. For CONTRADICTIONS use vector_search_tool. For oversupply/scarcity/specialist distribution/web presence use genie_chat_tool.'
       )))
     )
   )
