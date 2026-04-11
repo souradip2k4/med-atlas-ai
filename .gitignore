@@ -3,4 +3,7 @@
 __pycache__/
 *.pyc
 .agents/
+.claude/
 .env
+mlruns
+plans

@@ -4,6 +4,22 @@ version = "0.1.0"
 description = "Med-Atlas AI Project"
 readme = "README.md"
 requires-python = ">=3.12"
+dependencies = [
+    "databricks-connect>=16.4.15",
+    "databricks-sdk>=0.102.0",
+    "databricks-vectorsearch>=0.40",
+    "databricks-langchain>=0.3.0",
+    "langchain-core>=0.3.83",
+    "langgraph>=1.0.1",
+    "pandas>=2.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
+    "databricks-agents>=0.20.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "mlflow==3.10.1",
+    "geopy>=2.4.1",
+]
 
 [tool.ruff]
 line-length = 100
@@ -11,25 +27,23 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "C",  # flake8-comprehensions
-    "B",  # flake8-bugbear
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # pyflakes
+    "I", # isort
+    "C", # flake8-comprehensions
+    "B", # flake8-bugbear
 ]
 ignore = [
-    "E501",  # line too long
-    "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
+    "E501", # line too long
+    "B008", # do not perform function calls in argument defaults
+    "C901", # too complex
 ]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q"
-testpaths = [
-    "tests",
-]
+testpaths = ["tests"]
 
 [tool.black]
 line-length = 100
