@@ -60,6 +60,21 @@ CRITICAL REQUIREMENTS
 - Each fact must be traceable to the input content
 - Maintain medical terminology accuracy while keeping statements clear
 
+DESCRIPTION GENERATION
+- In addition to the fact categories above, generate a `description` field.
+- This should be a concise 1-3 sentence summary of the facility's services, capabilities, and/or history.
+- Base it only on the provided content. If no meaningful description can be generated, set it to null.
+- Do NOT duplicate information from the fact arrays — the description should be a human-readable overview.
+
+NUMERIC EXTRACTION (capacity, noDocors)
+- Scan ALL input fields — especially capability, equipment, description, and procedure — for any mention of:
+  - Bed counts: phrases like "300 beds", "bed capacity of 39", "100-bed facility", "neonatal beds", "wards with X beds"
+  - Doctor/staff counts: phrases like "10 doctors on staff", "5 physicians", "team of 3 medical officers", "staff of 20 clinicians"
+- Extract ONLY the total integer count. Do NOT include units.
+- If multiple numbers are mentioned, sum only if they clearly refer to the same category. Otherwise pick the most prominent one.
+- For noDocors: count only clinical medical staff (doctors, physicians, surgeons, specialists, medical officers). Do NOT count nurses, paramedics, or admin staff.
+- If no numeric evidence is found, set the field to null.
+
 EXAMPLE OUTPUT
 ```json
   "procedure": [
@@ -83,7 +98,10 @@ EXAMPLE OUTPUT
     "Comprehensive stroke care program",
     "Offers inpatient and outpatient services",
     "Has 15 neonatal specialists on staff"
-  ]
+  ],
+  "capacity": 200,
+  "noDocors": 45,
+  "description": "A 200-bed tertiary hospital offering comprehensive trauma care, cardiac surgery, and oncology services. Established in 1985, it serves as the primary referral center for the Western Region."
 ```
 """
 
@@ -110,4 +128,26 @@ class FacilityFacts(BaseModel):
             "diagnostic capabilities (MRI, neurodiagnostics), accreditations, inpatient/outpatient, staffing levels, patient capacity. "
             "Excludes: addresses, contact info, business hours, pricing."
         )
+    )
+    description: Optional[str] = Field(
+        None,
+        description=(
+            "A concise 1-3 sentence summary of the facility's services, capabilities, and/or history. "
+            "Base it only on the provided content. Do NOT duplicate information from the fact arrays."
+        ),
+    )
+    capacity: Optional[int] = Field(
+        None,
+        description=(
+            "Total inpatient bed count. Scan ALL text fields (capability, equipment, description, procedure) for "
+            "phrases like '300 beds', 'bed capacity of 39', '100-bed', '15 wards'. Extract ONLY the integer."
+        ),
+    )
+    noDocors: Optional[int] = Field(
+        None,
+        description=(
+            "Total number of clinical medical staff (doctors, physicians, surgeons, specialists, medical officers). "
+            "Scan ALL text fields (capability, equipment, description, procedure) for phrases like '10 doctors', '5 physicians on staff', 'team of 15 specialists', "
+            "'3 medical officers'. Do NOT count nurses, paramedics, or administrative staff. Extract ONLY the integer."
+        ),
     )

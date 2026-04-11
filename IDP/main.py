@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-main.py — End-to-end IDP pipeline orchestration.
+main.py — End-to-end IDP pipeline orchestration for Med-Atlas-AI.
 
 Stages
 ------
-1. Load CSV → ``raw_facilities`` Delta table
-2. Read rows, synthesize text (with normalization)
-3. Process each row through the 4-step LLM extraction chain
-4. Merge → ``facility_records``
-5. Generate atomic facts (with paraphrasing) → ``facility_facts``
-6. Generate embeddings (batched) → ``facility_embeddings``
-7. Aggregate regional insights → ``regional_insights``
-8. Create Vector Search index (precomputed embeddings)
+1. Initialize Database → Register schemas for target Delta tables
+2. Load CSV → Read structured raw data into memory
+3. Checkpoint → Identify which CSV rows have already been processed
+4. Extraction Chain → Process new rows through the 4-step LLM pipeline
+5. Merge & Shape → Consolidate LLM outputs into `facility_records`
+6. Fact Generation → Paraphrase and extract scalar facts into `facility_facts`
+7. Regional Insights → Aggregate macro analytics, save to `regional_insights`, 
+   and inject location-aware summary sentences into `facility_facts` for RAG.
 """
 
 import logging
@@ -70,8 +70,8 @@ def main() -> None:
     processed_ids = set()
     if db._table_exists("facility_records"):
         try:
-            existing_df = db.read_delta("facility_records").select("source_row_id")
-            processed_ids = {r["source_row_id"] for r in existing_df.collect()}
+            existing_df = db.read_delta("facility_records").select("facility_id")
+            processed_ids = {r["facility_id"] for r in existing_df.collect()}
             logger.info("Checkpoint: Found %d already processed rows in facility_records", len(processed_ids))
         except Exception as e:
             logger.warning("Could not read existing facility_records for checkpointing: %s", e)
@@ -116,6 +116,9 @@ def main() -> None:
         logger.info("═══ All rows already processed. Nothing to do. ═══")
         _print_summary(db)
         return
+
+    # Flag: track whether any new rows were actually written this run
+    new_rows_written = False
 
     BATCH_SIZE = 50
     facility_records_batch: List[Dict[str, Any]] = []
@@ -167,6 +170,7 @@ def main() -> None:
                         records_df = db.spark.createDataFrame(facility_records_batch, FACILITY_RECORDS_SCHEMA)
                         db.append_delta(records_df, "facility_records")
                         facility_records_batch.clear()
+                        new_rows_written = True  # New data landed — Stage 7 will run
                     if facts_batch:
                         facts_df = db.spark.createDataFrame(facts_batch, FACILITY_FACTS_SCHEMA)
                         db.append_delta(facts_df, "facility_facts")
@@ -174,12 +178,12 @@ def main() -> None:
 
         logger.info("Extraction and batch-saving complete.")
 
-
-
-    # ── 7. Regional insights ─────────────────────────────────────────
-    logger.info("═══ Stage 7: Aggregating regional insights ═══")
-    _compute_regional_insights(db)
-
+    # ── 7. Regional insights ───────────────────────────────────────────
+    if new_rows_written:
+        logger.info("═══ Stage 7: Aggregating regional insights (✔ new data written) ═══")
+        _compute_regional_insights(db)
+    else:
+        logger.info("═══ Stage 7: Skipped — no new rows were written this run. ═══")
 
 
     elapsed = time.time() - t0
@@ -190,51 +194,94 @@ def main() -> None:
 # ── Regional insights aggregation ────────────────────────────────────────
 
 def _compute_regional_insights(db) -> None:
-    """Aggregate facility_records into regional_insights."""
+    """Aggregate facility_records into multi-dimensional regional_insights."""
     try:
         records_df = db.read_delta("facility_records")
     except Exception:
         logger.warning("facility_records not found — skipping regional insights")
         return
 
-    # Explode specialties and group by country/state/city/specialty
-    exploded = (
-        records_df
-        .select("facility_id", "country", "state", "city", "specialties")
-        .withColumn("specialty", F.explode_outer(F.col("specialties")))
+    # Base select needed for all aggregations
+    base_df = records_df.select(
+        "facility_id", "country", "state", "city", 
+        "capacity", "no_doctors", "operator_type",
+        "specialties", "procedures", "equipment", "capabilities"
     )
+    
+    insights_dfs = []
 
-    insights = (
-        exploded
-        .groupBy("country", "state", "city", "specialty")
-        .agg(
+    # 1. OVERVIEW (Totals per region)
+    overview_df = base_df.groupBy("country", "state", "city").agg(
+        F.countDistinct("facility_id").alias("facility_count"),
+        F.sum("capacity").alias("total_capacity"),
+        F.sum("no_doctors").alias("total_doctors"),
+        F.collect_set("facility_id").alias("contributing_facility_ids")
+    )
+    overview_df = overview_df.select(
+        "country", "state", "city",
+        F.lit("overview").alias("insight_category"),
+        F.lit("all_facilities").alias("insight_value"),
+        "facility_count", "total_capacity", "total_doctors", "contributing_facility_ids"
+    )
+    insights_dfs.append(overview_df)
+
+    # 2. OPERATOR TYPE
+    operator_df = base_df.filter(F.col("operator_type").isNotNull()).groupBy("country", "state", "city", "operator_type").agg(
+        F.countDistinct("facility_id").alias("facility_count"),
+        F.sum("capacity").alias("total_capacity"),
+        F.sum("no_doctors").alias("total_doctors"),
+        F.collect_set("facility_id").alias("contributing_facility_ids")
+    )
+    operator_df = operator_df.select(
+        "country", "state", "city",
+        F.lit("operator").alias("insight_category"),
+        F.col("operator_type").alias("insight_value"),
+        "facility_count", "total_capacity", "total_doctors", "contributing_facility_ids"
+    )
+    insights_dfs.append(operator_df)
+
+    # Helper function for array explosions (total_capacity is set to NULL to prevent statistical overcounting)
+    def _explode_and_agg(column_name: str, category_name: str):
+        exploded = base_df.withColumn("item", F.explode_outer(F.col(column_name))).filter(F.col("item").isNotNull())
+        grouped = exploded.groupBy("country", "state", "city", "item").agg(
             F.countDistinct("facility_id").alias("facility_count"),
+            F.collect_set("facility_id").alias("contributing_facility_ids")
         )
-        .withColumn("coverage_score", F.lit(None).cast("float"))
-        .withColumn("gap_flag", F.when(F.col("facility_count") < 2, True).otherwise(False))
-        .withColumn(
-            "risk_level",
-            F.when(F.col("facility_count") == 1, "high")
-            .when(F.col("facility_count") < 3, "medium")
-            .otherwise("low"),
+        from pyspark.sql.types import IntegerType
+        return grouped.select(
+            "country", "state", "city",
+            F.lit(category_name).alias("insight_category"),
+            F.col("item").alias("insight_value"),
+            "facility_count",
+            F.lit(None).cast(IntegerType()).alias("total_capacity"),
+            F.lit(None).cast(IntegerType()).alias("total_doctors"),
+            "contributing_facility_ids"
         )
-        .withColumn(
-            "recommendation",
-            F.when(F.col("facility_count") == 1, "Single provider — consider capacity expansion")
-            .when(F.col("facility_count") < 3, "Limited coverage — monitor access")
-            .otherwise(None),
-        )
-    )
 
-    # Select in schema order
-    ordered = insights.select(
-        "country", "state", "city", "specialty",
-        "facility_count", "coverage_score",
-        "gap_flag", "risk_level", "recommendation",
+    # 3. SPECIALTIES (camelCase enum values — groups correctly)
+    insights_dfs.append(_explode_and_agg("specialties", "specialty"))
+    # NOTE: procedure, equipment, capability categories removed —
+    # free-text strings create noisy duplicates (e.g. "Offers internal
+    # medicine services" vs "Provides internal medicine services") and
+    # bury numeric data in prose.  Genie handles those queries via
+    # facility_records + facility_facts directly.
+
+    # Union all slices together
+    final_insights = insights_dfs[0]
+    for df in insights_dfs[1:]:
+        final_insights = final_insights.unionByName(df)
+
+    # Save exactly to the BI schema order
+    ordered = final_insights.select(
+        "country", "state", "city", 
+        "insight_category", "insight_value", 
+        "facility_count", "total_capacity", "total_doctors",
+        "contributing_facility_ids"
     )
 
     db.write_delta(ordered, "regional_insights")
-    logger.info("regional_insights: %d rows", ordered.count())
+    row_count = ordered.count()
+    logger.info("regional_insights (BI Table): %d multi-dimensional rows generated.", row_count)
 
 
 # ── Summary ──────────────────────────────────────────────────────────────

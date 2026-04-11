@@ -14,10 +14,11 @@ from pyspark.sql.types import (
     StructField,
     StringType,
     IntegerType,
-    FloatType,
     BooleanType,
     ArrayType,
+    MapType,
     TimestampType,
+    DoubleType,
 )
 
 # ---------------------------------------------------------------------------
@@ -26,7 +27,6 @@ from pyspark.sql.types import (
 FACILITY_RECORDS_SCHEMA = StructType([
     # ── Identity ──
     StructField("facility_id", StringType(), nullable=False),
-    StructField("source_row_id", StringType(), nullable=False),
 
     # ── Core ──
     StructField("facility_name", StringType(), nullable=False),
@@ -47,30 +47,28 @@ FACILITY_RECORDS_SCHEMA = StructType([
     StructField("country", StringType(), nullable=True),
     StructField("country_code", StringType(), nullable=True),
 
+    # ── Geospatial ──
+    StructField("latitude", DoubleType(), nullable=True),
+    StructField("longitude", DoubleType(), nullable=True),
+
     # ── Contact ──
     StructField("phone_numbers", ArrayType(StringType()), nullable=True),
     StructField("email", StringType(), nullable=True),
     StructField("websites", ArrayType(StringType()), nullable=True),
+    StructField("social_links", MapType(StringType(), StringType()), nullable=True),
     StructField("officialWebsite", StringType(), nullable=True),
 
     # ── Meta ──
     StructField("year_established", IntegerType(), nullable=True),
     StructField("accepts_volunteers", BooleanType(), nullable=True),
-    StructField("number_doctors", IntegerType(), nullable=True),
     StructField("capacity", IntegerType(), nullable=True),
+    StructField("no_doctors", IntegerType(), nullable=True),
+    StructField("description", StringType(), nullable=True),
+    StructField("mission_statement", StringType(), nullable=True),
+    StructField("affiliation_types", ArrayType(StringType()), nullable=True),
+    StructField("operator_type", StringType(), nullable=True),
+    StructField("facility_type", StringType(), nullable=True),
 
-    # ── Evidence & confidence ──
-    StructField("evidence_text", StringType(), nullable=False),
-    StructField("source_text", StringType(), nullable=True),
-    StructField("source_column", StringType(), nullable=True),
-    StructField("extraction_confidence", FloatType(), nullable=False),
-    StructField("confidence_specialties", FloatType(), nullable=True),
-    StructField("confidence_equipment", FloatType(), nullable=True),
-    StructField("confidence_capabilities", FloatType(), nullable=True),
-
-    # ── Suspicious flag ──
-    StructField("is_suspicious", BooleanType(), nullable=True),
-    StructField("suspicious_reason", StringType(), nullable=True),
 
     # ── Timestamps ──
     StructField("created_at", TimestampType(), nullable=True),
@@ -85,12 +83,8 @@ FACILITY_FACTS_SCHEMA = StructType([
     StructField("facility_id", StringType(), nullable=False),
     StructField("fact_text", StringType(), nullable=False),
     StructField("fact_type", StringType(), nullable=False),
-    StructField("source_row_id", StringType(), nullable=False),
-    StructField("source_column", StringType(), nullable=True),
     StructField("source_text", StringType(), nullable=True),
 ])
-
-
 
 # ---------------------------------------------------------------------------
 # regional_insights — aggregated regional analytics
@@ -99,10 +93,10 @@ REGIONAL_INSIGHTS_SCHEMA = StructType([
     StructField("country", StringType(), nullable=True),
     StructField("state", StringType(), nullable=True),
     StructField("city", StringType(), nullable=True),
-    StructField("specialty", StringType(), nullable=True),
+    StructField("insight_category", StringType(), nullable=False),
+    StructField("insight_value", StringType(), nullable=False),
     StructField("facility_count", IntegerType(), nullable=True),
-    StructField("coverage_score", FloatType(), nullable=True),
-    StructField("gap_flag", BooleanType(), nullable=True),
-    StructField("risk_level", StringType(), nullable=True),
-    StructField("recommendation", StringType(), nullable=True),
+    StructField("total_capacity", IntegerType(), nullable=True),
+    StructField("total_doctors", IntegerType(), nullable=True),
+    StructField("contributing_facility_ids", ArrayType(StringType()), nullable=True),
 ])

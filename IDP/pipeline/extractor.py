@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_databricks import ChatDatabricks
+from databricks_langchain import ChatDatabricks
 
 from config.organization_extraction import (
     OrganizationExtractionOutput,
@@ -35,7 +35,11 @@ from config.facility_and_ngo_fields import (
     Facility,
     ORGANIZATION_INFORMATION_SYSTEM_PROMPT,
 )
-from pipeline.preprocessor import synthesize_row_text
+from pipeline.preprocessor import (
+    synthesize_row_text,
+    synthesize_for_org_classification,
+    synthesize_for_fact_extraction,
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -47,8 +51,31 @@ _JSON_SUFFIX = (
 )
 
 
-def _strip_markdown_json(text: str) -> str:
-    """Remove ```json ... ``` wrappers if the LLM added them."""
+def _strip_markdown_json(text: str | list) -> str:
+    """Remove ```json ... ``` wrappers if the LLM added them.
+
+    Also handles the case where newer versions of databricks_langchain
+    return ``response.content`` as a list of content-block dicts,
+    e.g. ``[{"type": "text", "text": "..."}]``.
+
+    Reasoning/thinking blocks (``{"type": "reasoning", ...}``) are
+    explicitly skipped — only ``{"type": "text", ...}`` blocks are
+    included so the chain-of-thought prefix does not corrupt the JSON.
+    """
+    # Normalise list-of-blocks to a plain string
+    if isinstance(text, list):
+        parts = []
+        for block in text:
+            if isinstance(block, dict):
+                block_type = block.get("type", "text")
+                # Skip reasoning / thinking blocks entirely
+                if block_type in ("reasoning", "thinking"):
+                    continue
+                parts.append(block.get("text") or block.get("content") or "")
+            else:
+                parts.append(str(block))
+        text = "".join(parts)
+
     text = text.strip()
     # Remove ```json or ``` fences
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -80,96 +107,96 @@ class LLMExtractor:
 
     # ── Internal call helpers ────────────────────────────────────────
 
-    def _call_llm(self, system_prompt: str, user_text: str) -> str:
-        """Invoke the LLM and return the raw response string."""
+    def _call_llm(self, system_prompt: str, user_text: str, max_retries: int = 2) -> str:
+        """Invoke the LLM and return the raw response string.
+
+        Retries up to ``max_retries`` times if the LLM returns an empty
+        response (e.g. a reasoning-model that emitted only a thinking block
+        with no text block on first attempt).
+        """
         messages = [
             SystemMessage(content=system_prompt + _JSON_SUFFIX),
             HumanMessage(content=user_text),
         ]
-        response = self.llm.invoke(messages)
-        return _strip_markdown_json(response.content)
+        for attempt in range(1, max_retries + 1):
+            response = self.llm.invoke(messages)
+            result = _strip_markdown_json(response.content)
+            if result:
+                return result
+            logger.warning(
+                "LLM returned empty response (attempt %d/%d) — retrying",
+                attempt, max_retries,
+            )
+        logger.error("LLM returned empty response after %d attempts", max_retries)
+        return ""
 
-    def _parse_with_retry(self, model_cls, raw_json: str, system_prompt: str, user_text: str):
-        """
-        Parse ``raw_json`` via ``model_cls.model_validate_json``.
-        Retry the LLM call once on failure.
-        Returns (parsed_model, confidence) or (None, 0.0).
-        """
-        # Attempt 1
+    def _parse(self, model_cls, raw_json: str):
+        """Parse ``raw_json`` via ``model_cls.model_validate_json``."""
+        if not raw_json or not raw_json.strip():
+            logger.warning(
+                "Empty JSON string passed to parser for %s — skipping",
+                model_cls.__name__,
+            )
+            return None
         try:
             parsed = model_cls.model_validate_json(raw_json)
-            return parsed, 0.85
-        except Exception as e1:
-            logger.warning(
-                "Validation failed (attempt 1) for %s: %s — retrying",
-                model_cls.__name__, e1,
-            )
-
-        # Retry — call LLM again
-        try:
-            raw_json_retry = self._call_llm(system_prompt, user_text)
-            parsed = model_cls.model_validate_json(raw_json_retry)
-            return parsed, 0.65  # lower confidence on retry
-        except Exception as e2:
+            return parsed
+        except Exception as e:
             logger.error(
-                "Validation failed (attempt 2) for %s: %s — skipping",
-                model_cls.__name__, e2,
+                "Validation failed for %s: %s — skipping",
+                model_cls.__name__, e,
             )
-            return None, 0.0
+            return None
 
     # ── Step 1: Organization extraction ──────────────────────────────
 
-    def extract_organizations(
-        self, text: str
-    ) -> Tuple[Optional[OrganizationExtractionOutput], float]:
+    def extract_organizations(self, text: str) -> Optional[OrganizationExtractionOutput]:
         prompt = ORGANIZATION_EXTRACTION_SYSTEM_PROMPT
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(OrganizationExtractionOutput, raw, prompt, text)
+        return self._parse(OrganizationExtractionOutput, raw)
 
     # ── Step 2: Facility fact extraction ─────────────────────────────
 
-    def extract_facility_facts(
-        self, text: str, facility_name: str
-    ) -> Tuple[Optional[FacilityFacts], float]:
+    def extract_facility_facts(self, text: str, facility_name: str) -> Optional[FacilityFacts]:
         prompt = FREE_FORM_SYSTEM_PROMPT.replace("{organization}", facility_name)
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(FacilityFacts, raw, prompt, text)
+        return self._parse(FacilityFacts, raw)
 
     # ── Step 3: Medical specialty extraction ──────────────────────────
 
-    def extract_medical_specialties(
-        self, text: str, facility_name: str
-    ) -> Tuple[Optional[MedicalSpecialties], float]:
+    def extract_medical_specialties(self, text: str, facility_name: str) -> Optional[MedicalSpecialties]:
         prompt = MEDICAL_SPECIALTIES_SYSTEM_PROMPT.replace("{organization}", facility_name)
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(MedicalSpecialties, raw, prompt, text)
+        return self._parse(MedicalSpecialties, raw)
 
     # ── Step 4: Facility structured extraction ───────────────────────
 
-    def extract_facility_info(
-        self, text: str, facility_name: str
-    ) -> Tuple[Optional[Facility], float]:
+    def extract_facility_info(self, text: str, facility_name: str) -> Optional[Facility]:
         prompt = ORGANIZATION_INFORMATION_SYSTEM_PROMPT.replace("{organization}", facility_name)
         raw = self._call_llm(prompt, text)
-        return self._parse_with_retry(Facility, raw, prompt, text)
+        return self._parse(Facility, raw)
 
     # ── Full row processing ──────────────────────────────────────────
 
     def process_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run the complete 4-step extraction chain on a single row.
+        Run the 2-step extraction chain on a single row.
+
+        Steps 3 (specialties) and 4 (structured info) are skipped:
+          - Specialties already exist as clean camelCase enums in the CSV.
+          - Structured fields (address, phone, etc.) come from the CSV directly.
+          - Description is now generated by Step 2.
+          - number_doctors / capacity use regex fallback in merger.py.
 
         Returns a dict with:
-          - org_output, facts_output, specialties_output, facility_output
-          - synthesized_text, source_row_id
-          - per-step confidence scores
+          - org_output, facts_output
+          - facility_name, synthesized_text, source_row_id
         """
-        # Synthesise row text
-        synth_text = synthesize_row_text(row)
         source_row_id = str(row.get("unique_id") or row.get("pk_unique_id") or "")
 
-        # Step 1 — Organizations
-        org_output, conf_org = self.extract_organizations(synth_text)
+        # Step 1 — Organization classification (targeted text)
+        org_text = synthesize_for_org_classification(row)
+        org_output = self.extract_organizations(org_text)
 
         # Determine primary facility name
         facility_name = None
@@ -178,25 +205,18 @@ class LLMExtractor:
         if not facility_name:
             facility_name = row.get("name") or "Unknown Facility"
 
-        # Step 2 — Facility facts
-        facts_output, conf_facts = self.extract_facility_facts(synth_text, facility_name)
+        # Step 2 — Fact extraction + description (targeted text)
+        fact_text = synthesize_for_fact_extraction(row)
+        facts_output = self.extract_facility_facts(fact_text, facility_name)
 
-        # Step 3 — Medical specialties
-        specialties_output, conf_spec = self.extract_medical_specialties(synth_text, facility_name)
-
-        # Step 4 — Facility structured info
-        facility_output, conf_fac = self.extract_facility_info(synth_text, facility_name)
+        # Steps 3 & 4 SKIPPED — CSV data used directly in merger.py
 
         return {
             "org_output": org_output,
             "facts_output": facts_output,
-            "specialties_output": specialties_output,
-            "facility_output": facility_output,
+            "specialties_output": None,   # CSV specialties used directly
+            "facility_output": None,      # CSV structured fields used directly
             "facility_name": facility_name,
-            "synthesized_text": synth_text,
+            "synthesized_text": fact_text,
             "source_row_id": source_row_id,
-            "confidence_org": conf_org,
-            "confidence_facts": conf_facts,
-            "confidence_specialties": conf_spec,
-            "confidence_facility": conf_fac,
         }

@@ -122,7 +122,7 @@ class DatabricksDatabase:
                 df.write
                 .format("delta")
                 .mode(mode)
-                .option("overwriteSchema", "true")
+                .option("mergeSchema", "true")
                 .saveAsTable(fqn)
             )
             
