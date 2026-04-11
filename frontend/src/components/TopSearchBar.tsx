@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { MapPinned, MapPin, Stethoscope, X } from 'lucide-react';
 
 import { formatLabel } from '../lib/format';
@@ -44,7 +44,7 @@ function FieldButton({
   return (
     <button
       type="button"
-      className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-55`}
+      className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-55 w-full`}
       onClick={onClick}
       disabled={disabled}
     >
@@ -96,7 +96,12 @@ export function TopSearchBar({
   onClearCity,
   onClearSpecialties,
 }: TopSearchBarProps) {
+  const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>();
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const regionRef = useRef<HTMLDivElement | null>(null);
+  const cityRef = useRef<HTMLDivElement | null>(null);
+  const specialtyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -114,45 +119,100 @@ export function TopSearchBar({
   const cityOptions = metadata?.cities_by_region[filters.region] ?? [];
   const specialtyCount = filters.specialties.length;
 
+  useLayoutEffect(() => {
+    if (!activeDropdown) {
+      return;
+    }
+
+    const updateDropdownStyle = () => {
+      const frame = frameRef.current;
+      const target =
+        activeDropdown === 'region'
+          ? regionRef.current
+          : activeDropdown === 'city'
+            ? cityRef.current
+            : specialtyRef.current;
+
+      if (!frame || !target) {
+        setDropdownStyle(undefined);
+        return;
+      }
+
+      const frameRect = frame.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const maxWidth = frameRect.width;
+      const desiredWidth =
+        activeDropdown === 'specialty' ? Math.min(560, maxWidth) : Math.min(430, maxWidth);
+      const preferredLeft = targetRect.left - frameRect.left;
+      const clampedLeft = Math.min(
+        Math.max(0, preferredLeft),
+        Math.max(0, maxWidth - desiredWidth),
+      );
+
+      setDropdownStyle({
+        left: `${clampedLeft}px`,
+        width: `${desiredWidth}px`,
+      });
+    };
+
+    updateDropdownStyle();
+    window.addEventListener('resize', updateDropdownStyle);
+
+    return () => {
+      window.removeEventListener('resize', updateDropdownStyle);
+    };
+  }, [activeDropdown, filters.region, specialtyCount, cityOptions.length]);
+
   return (
     <div
       className="absolute left-1/2 top-7 z-30 w-[min(880px,calc(100%-112px))] -translate-x-1/2 max-[920px]:top-3 max-[920px]:w-[calc(100%-24px)]"
       ref={shellRef}
     >
-      <div className="grid animate-chrome-in grid-cols-3 gap-2 rounded-[30px] border border-white/88 bg-white/94 shadow-search backdrop-blur-[18px] max-w-[700px]">
-        <FieldButton
-          icon={<MapPinned className="size-5" />}
-          label="Region"
-          value={filters.region}
-          active={activeDropdown === 'region'}
-          onClick={() =>
-            onDropdownChange(activeDropdown === 'region' ? null : 'region')
-          }
-          onClear={filters.region ? onClearRegion : undefined}
-        />
-        <FieldButton
-          icon={<MapPin className="size-5" />}
-          label="City"
-          value={filters.city}
-          active={activeDropdown === 'city'}
-          disabled={!filters.region}
-          onClick={() => onDropdownChange(activeDropdown === 'city' ? null : 'city')}
-          onClear={filters.city ? onClearCity : undefined}
-        />
-        <FieldButton
-          icon={<Stethoscope className="size-5" />}
-          label="Specialty"
-          value={specialtyCount > 0 ? `${specialtyCount} specialties` : ''}
-          active={activeDropdown === 'specialty'}
-          onClick={() =>
-            onDropdownChange(activeDropdown === 'specialty' ? null : 'specialty')
-          }
-          onClear={specialtyCount > 0 ? onClearSpecialties : undefined}
-        />
-      </div>
+      <div className="relative mx-auto max-w-[700px]" ref={frameRef}>
+        <div className="grid animate-chrome-in grid-cols-3 gap-2 rounded-[30px] border border-white/88 bg-white/94 shadow-search backdrop-blur-[18px]">
+          <div ref={regionRef}>
+            <FieldButton
+          
+              icon={<MapPinned className="size-5" />}
+              label="Region"
+              value={filters.region}
+              active={activeDropdown === 'region'}
+              onClick={() =>
+                onDropdownChange(activeDropdown === 'region' ? null : 'region')
+              }
+              onClear={filters.region ? onClearRegion : undefined}
+            />
+          </div>
+          <div ref={cityRef}>
+            <FieldButton
+              icon={<MapPin className="size-5" />}
+              label="City"
+              value={filters.city}
+              active={activeDropdown === 'city'}
+              disabled={!filters.region}
+              onClick={() => onDropdownChange(activeDropdown === 'city' ? null : 'city')}
+              onClear={filters.city ? onClearCity : undefined}
+            />
+          </div>
+          <div ref={specialtyRef}>
+            <FieldButton
+              icon={<Stethoscope className="size-5" />}
+              label="Specialty"
+              value={specialtyCount > 0 ? `${specialtyCount} specialties` : ''}
+              active={activeDropdown === 'specialty'}
+              onClick={() =>
+                onDropdownChange(activeDropdown === 'specialty' ? null : 'specialty')
+              }
+              onClear={specialtyCount > 0 ? onClearSpecialties : undefined}
+            />
+          </div>
+        </div>
 
       {activeDropdown === 'region' ? (
-        <div className="mx-auto mt-3 w-[min(760px,100%)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]">
+        <div
+          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
+          style={dropdownStyle}
+        >
           <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
             <span>Regions</span>
             <span>{metadata?.regions.length ?? 0}</span>
@@ -181,7 +241,10 @@ export function TopSearchBar({
       ) : null}
 
       {activeDropdown === 'city' ? (
-        <div className="mx-auto mt-3 w-[min(560px,100%)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]">
+        <div
+          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
+          style={dropdownStyle}
+        >
           <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
             <span>Cities in {filters.region || 'selected region'}</span>
             <span>{cityOptions.length}</span>
@@ -216,7 +279,10 @@ export function TopSearchBar({
       ) : null}
 
       {activeDropdown === 'specialty' ? (
-        <div className="mx-auto mt-3 w-[min(860px,100%)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]">
+        <div
+          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
+          style={dropdownStyle}
+        >
           <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
             <span>Specialties</span>
             <span>{metadata?.specialties.length ?? 0}</span>
@@ -258,6 +324,7 @@ export function TopSearchBar({
           ) : null}
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

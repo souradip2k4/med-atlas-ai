@@ -88,16 +88,29 @@ def genie_chat_tool(query: str) -> str:
     """
     from databricks_langchain import GenieAgent
 
+    enhanced_query = (
+        f"{query}\n\n"
+        "---\n"
+        "IMPORTANT SCHEMA INSTRUCTIONS FOR GENIE:\n"
+        "The `regional_insights` table is pre-aggregated and sliced. You MUST always filter by `insight_category` to avoid double-counting:\n"
+        "1. To get absolute total facility numbers, you MUST use `WHERE insight_category = 'overview' AND insight_value = 'all_facilities'`.\n"
+        "2. To group or count by operator type (public vs private), explicitly use `WHERE insight_category = 'operator'`.\n"
+        "3. To group or count by medical specialty, explicitly use `WHERE insight_category = 'specialty'`.\n"
+        "4. If querying the `facility_records` table directly instead, strictly use `COUNT(facility_id)` for totals."
+    )
+
     try:
         agent = GenieAgent(GENIE_ID)
-        return agent.invoke({"messages": [{"role": "user", "content": query}]})
+        response = agent.invoke({"messages": [{"role": "user", "content": enhanced_query}]})
+        return response["messages"][-1].content if "messages" in response else str(response)
     except AttributeError as exc:
         # MLflow tracing can raise internal LiveSpan/trace_id AttributeErrors.
         # Retry once — the second attempt succeeds without tracing interference.
         if "trace_id" in str(exc) or "LiveSpan" in str(exc):
             warnings.warn(f"Tracing internal error (non-fatal), retrying: {exc}")
             agent = GenieAgent(GENIE_ID)
-            return agent.invoke({"messages": [{"role": "user", "content": query}]})
+            response = agent.invoke({"messages": [{"role": "user", "content": enhanced_query}]})
+            return response["messages"][-1].content if "messages" in response else str(response)
         raise
 
 
@@ -167,18 +180,20 @@ For EACH facility, check:
    Example mismatch: "clinic" + "Neurosurgery" specialty
 5. CAPACITY check: If capacity/no_doctors is available, is it realistic for the claimed services?
 
-For each facility return a JSON object (NOT markdown, just valid JSON):
+For each facility that HAS ANOMALIES, return a JSON object (NOT markdown, just valid JSON):
 {
   "facility_id": "...",
   "facility_name": "...",
-  "status": "consistent" | "mismatch" | "suspicious",
-  "severity": "high" | "medium" | "low" | "none",
+  "status": "mismatch" | "suspicious",
+  "severity": "high" | "medium" | "low",
   "mismatches": ["description of each mismatch found"],
   "reasoning": "brief medical reasoning"
 }
 
 If a facility has completeness != "full", note what data is missing and
 that validation is limited for that facility.
+
+IMPORTANT: DO NOT return anything for facilities that are consistent with no anomalies. If ALL facilities in this batch are consistent, return an empty JSON array `[]`.
 
 Return ONLY a JSON array of these objects. No other text.
 
@@ -306,9 +321,11 @@ def medical_agent_tool(
                             response_text = response_text[:-3].strip()
                     batch_results = json.loads(response_text)
                     if isinstance(batch_results, list):
-                        all_batch_results.extend(batch_results)
+                        anomalous_only = [item for item in batch_results if str(item.get("status", "")).lower() != "consistent"]
+                        all_batch_results.extend(anomalous_only)
                     else:
-                        all_batch_results.append(batch_results)
+                        if str(batch_results.get("status", "")).lower() != "consistent":
+                            all_batch_results.append(batch_results)
                 except (json.JSONDecodeError, Exception) as batch_err:
                     # If LLM returns non-JSON, include the raw text as a fallback
                     all_batch_results.append({
@@ -735,10 +752,15 @@ class _ToolCallTracker:
                 for kv in re.finditer(r"'(\w+)':\s*'([^']*)'", meta_str):
                     meta[kv.group(1)] = kv.group(2)
                 snippet = page_content[:200] + "..." if len(page_content) > 200 else page_content
+                # The excerpt always starts with "FacilityName in City, ..." — extract the name.
+                facility_name_extracted = None
+                if " in " in snippet:
+                    facility_name_extracted = snippet.split(" in ")[0].strip()
                 sources.append({
                     "source_type": "facility_facts",
                     "fact_id": meta.get("fact_id"),
                     "facility_id": meta.get("facility_id"),
+                    "facility_name": facility_name_extracted,
                     "fact_type": meta.get("fact_type"),
                     "excerpt": snippet,
                 })
@@ -765,13 +787,21 @@ class _ToolCallTracker:
         tables_accessed: set[str] = {"facility_records"}
         try:
             data = json.loads(raw_output)
+            # Combine standard findings with new batched validation_results
             findings = data.get("findings") or []
             if isinstance(findings, str):
                 findings = json.loads(findings)
-            for f in (findings or []):
+                
+            val_results = data.get("validation_results") or []
+            if isinstance(val_results, str):
+                val_results = json.loads(val_results)
+                
+            all_items = findings + val_results
+
+            for f in all_items:
                 if not isinstance(f, dict):
                     continue
-                finding_type = f.get("type", "")
+                finding_type = f.get("type") or ("deep_validation" if "status" in f else "")
                 # Determine which tables this finding draws from
                 if finding_type in ("contradictory_signals", "feature_mismatch_raw",
                                     "ngo_raw_data", "ngo_overlap_raw"):
@@ -987,7 +1017,13 @@ class _ToolCallTracker:
                     all_tables.append(tbl)
             for src in step.get("sources", []):
                 total_sources += 1
+                # Try direct facility_name key first (set by all parsers)
                 name = src.get("facility_name")
+                # Fallback: extract from excerpt (format: "FacilityName in City, ...")
+                if not name:
+                    excerpt = src.get("excerpt", "")
+                    if excerpt and " in " in excerpt:
+                        name = excerpt.split(" in ")[0].strip()
                 if name and name not in all_facilities:
                     all_facilities.append(name)
 

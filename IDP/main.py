@@ -28,7 +28,6 @@ from storage.database import DatabricksDatabase
 from storage.models import (
     FACILITY_RECORDS_SCHEMA,
     FACILITY_FACTS_SCHEMA,
-    REGIONAL_INSIGHTS_SCHEMA,
 )
 from pipeline.loader import load_csv_data
 from pipeline.extractor import LLMExtractor
@@ -56,7 +55,6 @@ def main() -> None:
     # Ensure target tables exist
     db.create_table_if_not_exists("facility_records", FACILITY_RECORDS_SCHEMA)
     db.create_table_if_not_exists("facility_facts", FACILITY_FACTS_SCHEMA)
-    db.create_table_if_not_exists("regional_insights", REGIONAL_INSIGHTS_SCHEMA)
 
     # ── 2. Load CSV ──────────────────────────────────────────────────
     logger.info("═══ Stage 2: Loading CSV ═══")
@@ -170,7 +168,7 @@ def main() -> None:
                         records_df = db.spark.createDataFrame(facility_records_batch, FACILITY_RECORDS_SCHEMA)
                         db.append_delta(records_df, "facility_records")
                         facility_records_batch.clear()
-                        new_rows_written = True  # New data landed — Stage 7 will run
+                        new_rows_written = True
                     if facts_batch:
                         facts_df = db.spark.createDataFrame(facts_batch, FACILITY_FACTS_SCHEMA)
                         db.append_delta(facts_df, "facility_facts")
@@ -178,110 +176,9 @@ def main() -> None:
 
         logger.info("Extraction and batch-saving complete.")
 
-    # ── 7. Regional insights ───────────────────────────────────────────
-    if new_rows_written:
-        logger.info("═══ Stage 7: Aggregating regional insights (✔ new data written) ═══")
-        _compute_regional_insights(db)
-    else:
-        logger.info("═══ Stage 7: Skipped — no new rows were written this run. ═══")
-
-
     elapsed = time.time() - t0
     logger.info("═══ Pipeline complete in %.1f seconds ═══", elapsed)
     _print_summary(db)
-
-
-# ── Regional insights aggregation ────────────────────────────────────────
-
-def _compute_regional_insights(db) -> None:
-    """Aggregate facility_records into multi-dimensional regional_insights."""
-    try:
-        records_df = db.read_delta("facility_records")
-    except Exception:
-        logger.warning("facility_records not found — skipping regional insights")
-        return
-
-    # Base select needed for all aggregations
-    base_df = records_df.select(
-        "facility_id", "country", "state", "city", 
-        "capacity", "no_doctors", "operator_type",
-        "specialties", "procedures", "equipment", "capabilities"
-    )
-    
-    insights_dfs = []
-
-    # 1. OVERVIEW (Totals per region)
-    overview_df = base_df.groupBy("country", "state", "city").agg(
-        F.countDistinct("facility_id").alias("facility_count"),
-        F.sum("capacity").alias("total_capacity"),
-        F.sum("no_doctors").alias("total_doctors"),
-        F.collect_set("facility_id").alias("contributing_facility_ids")
-    )
-    overview_df = overview_df.select(
-        "country", "state", "city",
-        F.lit("overview").alias("insight_category"),
-        F.lit("all_facilities").alias("insight_value"),
-        "facility_count", "total_capacity", "total_doctors", "contributing_facility_ids"
-    )
-    insights_dfs.append(overview_df)
-
-    # 2. OPERATOR TYPE
-    operator_df = base_df.filter(F.col("operator_type").isNotNull()).groupBy("country", "state", "city", "operator_type").agg(
-        F.countDistinct("facility_id").alias("facility_count"),
-        F.sum("capacity").alias("total_capacity"),
-        F.sum("no_doctors").alias("total_doctors"),
-        F.collect_set("facility_id").alias("contributing_facility_ids")
-    )
-    operator_df = operator_df.select(
-        "country", "state", "city",
-        F.lit("operator").alias("insight_category"),
-        F.col("operator_type").alias("insight_value"),
-        "facility_count", "total_capacity", "total_doctors", "contributing_facility_ids"
-    )
-    insights_dfs.append(operator_df)
-
-    # Helper function for array explosions (total_capacity is set to NULL to prevent statistical overcounting)
-    def _explode_and_agg(column_name: str, category_name: str):
-        exploded = base_df.withColumn("item", F.explode_outer(F.col(column_name))).filter(F.col("item").isNotNull())
-        grouped = exploded.groupBy("country", "state", "city", "item").agg(
-            F.countDistinct("facility_id").alias("facility_count"),
-            F.collect_set("facility_id").alias("contributing_facility_ids")
-        )
-        from pyspark.sql.types import IntegerType
-        return grouped.select(
-            "country", "state", "city",
-            F.lit(category_name).alias("insight_category"),
-            F.col("item").alias("insight_value"),
-            "facility_count",
-            F.lit(None).cast(IntegerType()).alias("total_capacity"),
-            F.lit(None).cast(IntegerType()).alias("total_doctors"),
-            "contributing_facility_ids"
-        )
-
-    # 3. SPECIALTIES (camelCase enum values — groups correctly)
-    insights_dfs.append(_explode_and_agg("specialties", "specialty"))
-    # NOTE: procedure, equipment, capability categories removed —
-    # free-text strings create noisy duplicates (e.g. "Offers internal
-    # medicine services" vs "Provides internal medicine services") and
-    # bury numeric data in prose.  Genie handles those queries via
-    # facility_records + facility_facts directly.
-
-    # Union all slices together
-    final_insights = insights_dfs[0]
-    for df in insights_dfs[1:]:
-        final_insights = final_insights.unionByName(df)
-
-    # Save exactly to the BI schema order
-    ordered = final_insights.select(
-        "country", "state", "city", 
-        "insight_category", "insight_value", 
-        "facility_count", "total_capacity", "total_doctors",
-        "contributing_facility_ids"
-    )
-
-    db.write_delta(ordered, "regional_insights")
-    row_count = ordered.count()
-    logger.info("regional_insights (BI Table): %d multi-dimensional rows generated.", row_count)
 
 
 # ── Summary ──────────────────────────────────────────────────────────────
@@ -291,7 +188,6 @@ def _print_summary(db) -> None:
     tables = [
         "facility_records",
         "facility_facts",
-        "regional_insights",
     ]
     logger.info("─── Final table row counts ───")
     for t in tables:
