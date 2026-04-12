@@ -201,9 +201,12 @@ Facilities to analyze:
 """
 
 
+
+
 @tool
 def medical_agent_tool(
     query: str,
+    facility_name: str | None = None,
     facility_id: str | None = None,
     region: str | None = None,
     city: str | None = None,
@@ -214,15 +217,16 @@ def medical_agent_tool(
     Uses the analyze_medical_query UC function on facility_records
     to detect data quality issues and anomalies.
 
-    Returns data for 7 analysis types:
+    Returns data for 6 analysis types:
       1. regional_coverage        — per-region service coverage arrays for LLM gap analysis
       2. duplicate_facility       — exact same facility name occurring multiple times
       3. anomaly_flagging         — outlier capacity/doctor counts (3 std devs)
-      4. feature_mismatch_raw     — raw procedure vs equipment counts for LLM plausibility check
-      5. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
-      6. facility_profile_counts  — raw per-facility counts for LLM gap classification
-      7. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
+      4. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
+      5. facility_profile_counts  — raw per-facility counts for LLM gap classification
+      6. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
+                                    (also handles feature/equipment mismatch queries)
                                     (batched internally, 8 facilities per LLM call)
+                                    REQUIRES: region parameter
 
     NOTE — For classification/breakdown queries (facility_type, operator_type, affiliation_types,
       ngo counts, public vs private breakdown) — use genie_chat_tool instead.
@@ -269,6 +273,8 @@ def medical_agent_tool(
     from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
 
     args = {"query": query}
+    if facility_name:
+        args["facility_name"] = facility_name
     if facility_id:
         args["facility_id"] = facility_id
     if region:
@@ -284,21 +290,43 @@ def medical_agent_tool(
         raw_result = uc_fn.invoke({"query_json": json.dumps(args)})
         outer = json.loads(raw_result)
 
+        # UCFunctionToolkit wraps every UC function return in
+        #   {"format": "SCALAR", "value": "<json-string>"}.
+        # Unwrap to get the actual SQL return value before reading any keys.
+        if isinstance(outer, dict) and "value" in outer and "format" in outer:
+            inner = outer["value"]
+            outer = json.loads(inner) if isinstance(inner, str) else inner
+
         # Check for error responses (e.g., missing region for deep validation)
         if "error" in outer:
             return json.dumps(outer, indent=2)
 
         findings_raw = outer.get("findings", "[]")
-        findings = json.loads(findings_raw)
+        findings = json.loads(findings_raw) if isinstance(findings_raw, str) else findings_raw
         outer["findings"] = findings
 
-        # ── Deep Validation Batching ──────────────────────────────────────
-        # If this is a deep_validation response, batch-process the facility
-        # profiles through the LLM for medical consistency analysis.
-        if findings and isinstance(findings, list) and len(findings) > 0 \
-                and isinstance(findings[0], dict) \
-                and findings[0].get("type") == "deep_validation":
+        # Also parse data_coverage_summary (Branches 3, 4, 6 return it as a JSON string)
+        cov_raw = outer.get("data_coverage_summary")
+        if isinstance(cov_raw, str):
+            try:
+                outer["data_coverage_summary"] = json.loads(cov_raw)
+            except (json.JSONDecodeError, TypeError):
+                pass  # keep as-is if not valid JSON
 
+
+        # ── Batched LLM Evaluation ────────────────────────────────────────
+        # Only deep_validation requires Python-level batching.
+        # Feature mismatch is now fully handled inside Branch 7's deep_validation path.
+        _LLM_BATCH_TYPES = {
+            "deep_validation": _DEEP_VALIDATION_PROMPT,
+        }
+        finding_type_0 = findings[0].get("type") if (
+            findings and isinstance(findings, list) and len(findings) > 0
+            and isinstance(findings[0], dict)
+        ) else None
+
+        if finding_type_0 in _LLM_BATCH_TYPES:
+            batch_prompt_template = _LLM_BATCH_TYPES[finding_type_0]
             batch_llm = ChatDatabricks(
                 endpoint=LLM_ENDPOINT, temperature=0.0, max_tokens=2048
             )
@@ -308,7 +336,7 @@ def medical_agent_tool(
             for i in range(0, len(findings), _DEEP_VALIDATION_BATCH_SIZE):
                 batch = findings[i:i + _DEEP_VALIDATION_BATCH_SIZE]
                 batch_num = (i // _DEEP_VALIDATION_BATCH_SIZE) + 1
-                batch_prompt = _DEEP_VALIDATION_PROMPT + json.dumps(batch, indent=2)
+                batch_prompt = batch_prompt_template + json.dumps(batch, indent=2)
 
                 try:
                     response = batch_llm.invoke([HumanMessage(content=batch_prompt)])
@@ -503,7 +531,8 @@ IS_ANALYTIC = True if ANY of these keywords appear:
   "duplicate", "abnormal", "red flag", "problem type", "workforce",
   "staffing", "correlat", "overlapping", "mismatch",
   "feature mismatch", "procedure count", "equipment count", "signal",
-  "validate", "consistency", "verify claim", "capable", "infrastructure"
+  "validate", "consistency", "verify claim", "capable", "infrastructure",
+  "procedure.*equipment", "equipment.*procedure"
 
 ### Step 2 — Route accordingly:
 
@@ -564,21 +593,28 @@ If the user asks about **conflicting claims**, **contradictory information**, or
   4. Report findings with: facility name, the conflicting fact excerpts, your medical reasoning, and severity (high/medium/low)
   5. If no conflicts are found, say so clearly.
 
-### Step 2.5 — Deep Validation Protocol (applies when validating specialty/procedure/equipment consistency):
+### Step 2.5 — Deep Validation & Feature Mismatch Protocol:
 
 If the user asks about facility claim validation, specialty-procedure-equipment
-consistency, or infrastructure verification:
-  1. Extract the region name from the user's query (REQUIRED).
-     Optionally extract the city name for narrower scope.
+consistency, infrastructure verification, OR procedure-to-equipment mismatches:
+  1. Extract the region name OR the specific facility name from the user's query.
+     (One of these is REQUIRED to prevent scanning the entire country blindly).
   2. Call medical_agent_tool with:
-     → query: include "validate" or "deep validation" keyword
-     → region: the exact region name (e.g., "Northern")
+     → query: include "validate", "deep validation", or "feature mismatch" keyword
+     → region: the exact region name (e.g., "Northern") OR
+     → facility_name: the specific facility name (e.g., "Korle-Bu Teaching Hospital")
      → city: the city name if mentioned (optional)
-  3. The tool will internally batch-process all facilities in that region
-     (8 at a time) and return pre-analyzed validation results.
-  4. Present the results grouped by severity (high → medium → low → consistent).
-  5. Always start with the data_coverage_summary.
-  6. If the user does NOT mention a region, ask them to specify one.
+  3. If the user does NOT mention a region OR a specific facility, you MUST ask them
+     to specify one before calling the tool. Do NOT call the tool empty.
+  4. The tool will internally batch-process all matching facilities
+     (8 at a time) and apply the full 5-check validation:
+       • SPECIALTY→PROCEDURE consistency
+       • PROCEDURE→EQUIPMENT consistency (catches qualitative 1:1 mismatches)
+       • SPECIALTY→EQUIPMENT support
+       • FACILITY_TYPE plausibility
+       • CAPACITY/doctor count realism
+  5. Present results grouped by severity (high → medium → low → consistent).
+  6. Always start with the data_coverage_summary.
 
 ### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
 
@@ -591,18 +627,13 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
   • For `regional_coverage` (Unmet Needs):
       - `specialties_missing` is a **pre-computed, definitive SQL list** — report every specialty in it as a **confirmed gap** for that region (these exist elsewhere in the dataset but not here).
       - For `procedures_present` and `equipment_present` (free-text): apply your medical domain knowledge to identify what services or equipment a region of that size and facility count would typically need but appears to lack. These are NOT pre-computed gaps — they require your reasoning.
-  • For `feature_mismatch_raw` (Procedure/Equipment Mismatch):
-      1. **ALWAYS start** by reading `data_coverage_summary`. Tell the user how many facilities are missing equipment data before listing any findings.
-      2. Group your findings by `flag_type`:
-         - **`missing_equipment`:** Explain these are *unverifiable* (they claim procedures but equipment data is missing). Do NOT call these anomalies or overclaims.
-         - **`implausible_ratio`:** Use your medical expertise to evaluate if the ratio of procedures to equipment is medically implausible for the `facility_type`. (e.g., A clinic claiming 15 procedures with 1 piece of equipment may be an overclaim).
   • For `facility_profile_counts` (Problem Type):
       1. **ALWAYS start** by using `data_coverage_summary` to state the systemic data availability (e.g. "We only have equipment data for X% of facilities").
       2. For each facility, check the `_status` fields (`equipment_status`, `specialty_status`, `procedure_status`):
          - If a status is **`missing_data`**: The database simply lacks records for this category. Do NOT diagnose this as a medical gap. Group these as "Facilities with Unverifiable Missing Data" and explain why they cannot be fully evaluated.
          - If a status is **`true_zero`**: This is a confirmed absence of capability. Classify these true medical gaps as "equipment_gap" (has doctors/specialties but truly 0 equipment), "service_gap" (has equipment but truly 0 services/procedures), or "overclaim_gap" (claims many procedures but has 0 verifiable specialties).
   • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
-  • For `deep_validation` (Specialty/Procedure/Equipment Consistency):
+  • For `deep_validation` (Specialty/Procedure/Equipment Consistency + Feature Mismatch):
       The tool has already performed batch LLM analysis internally. The results
       contain pre-analyzed `validation_results` with `status`, `severity`, `mismatches`,
       and `reasoning` for each facility. Present these grouped by severity:
@@ -612,6 +643,9 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
       3. Then **medium** and **low** severity.
       4. For facilities with `status: consistent`, briefly note they passed.
       5. Format as a clear markdown report with facility names and specific mismatches.
+      6. Check #2 of the internal validator (PROCEDURE→EQUIPMENT) catches qualitative
+         mismatches (e.g., Brain Surgery claimed with only a Thermometer) even when the
+         numeric count ratio appears normal. Trust the `mismatches` and `reasoning` fields.
 
 ### Step 3 — Multi-tool orchestration:
 
@@ -764,8 +798,12 @@ class _ToolCallTracker:
                     "fact_type": meta.get("fact_type"),
                     "excerpt": snippet,
                 })
-        except Exception:
-            pass
+        except Exception as _genie_parse_err:
+            import warnings as _w
+            _w.warn(
+                f"[CitationParser] genie_chat parse failed (call_id={call_id}): "
+                f"{type(_genie_parse_err).__name__}: {_genie_parse_err}"
+            )
         return {
             "step_index": None,
             "tool_name": call_name,
@@ -787,11 +825,17 @@ class _ToolCallTracker:
         tables_accessed: set[str] = {"facility_records"}
         try:
             data = json.loads(raw_output)
+            # UCFunctionToolkit wraps results in {"format": "SCALAR", "value": "<json-string>"}.
+            # Unwrap to get the actual SQL return value before reading any keys.
+            if isinstance(data, dict) and "value" in data and "format" in data:
+                inner = data["value"]
+                data = json.loads(inner) if isinstance(inner, str) else inner
+
             # Combine standard findings with new batched validation_results
             findings = data.get("findings") or []
             if isinstance(findings, str):
                 findings = json.loads(findings)
-                
+
             val_results = data.get("validation_results") or []
             if isinstance(val_results, str):
                 val_results = json.loads(val_results)
@@ -808,14 +852,31 @@ class _ToolCallTracker:
                     tables_accessed.add("facility_facts")
                 if finding_type in ("regional_coverage",):
                     tables_accessed.add("regional_insights")
-                # Build a source entry — extract lat/lon where the SQL now provides them
+                # ── duplicate_facility: SQL returns a pair per finding ──────────────
+                # Fields: facility_1_id, facility_1_name, facility_2_id, facility_2_name
+                if finding_type == "duplicate_facility":
+                    for prefix in ("facility_1", "facility_2"):
+                        fid = f.get(f"{prefix}_id")
+                        fname = f.get(f"{prefix}_name")
+                        if fid or fname:
+                            sources.append({
+                                "source_type": "facility_records",
+                                "finding_type": finding_type,
+                                "facility_id": fid,
+                                "facility_name": fname,
+                                "latitude": None,
+                                "longitude": None,
+                                "severity": f.get("severity"),
+                                "note": "Duplicate facility record detected",
+                            })
+                    continue
+
+                # ── All other finding types (generic single-facility or regional) ────
                 source: dict[str, Any] = {
                     "source_type": "facility_records",
                     "finding_type": finding_type,
                     "facility_id": f.get("facility_id") or f.get("region"),
                     "facility_name": f.get("facility_name") or f.get("region"),
-                    # lat/lon now present in branches: reliability_score, anomaly_flagging,
-                    # feature_mismatch_raw, facility_profile_counts, data_staleness
                     "latitude": f.get("latitude"),
                     "longitude": f.get("longitude"),
                     "severity": f.get("severity"),
@@ -823,14 +884,17 @@ class _ToolCallTracker:
                 }
                 if finding_type == "regional_coverage":
                     source["source_type"] = "regional_insights"
-                    # regional_coverage is state-level, no individual pin — drop lat/lon
                     source["latitude"] = None
                     source["longitude"] = None
                     source["region"] = f.get("region")
                     source["total_facilities"] = f.get("total_facilities")
                 sources.append(source)
-        except Exception:
-            pass
+        except Exception as _med_parse_err:
+            import warnings as _w
+            _w.warn(
+                f"[CitationParser] medical_agent parse failed (call_id={call_id}): "
+                f"{type(_med_parse_err).__name__}: {_med_parse_err}"
+            )
         return {
             "step_index": None,
             "tool_name": call_name,
