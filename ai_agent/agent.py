@@ -138,7 +138,7 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 
     kwargs = {
         "index_name": VS_INDEX,
-        "num_results": 15,
+        "num_results": 20,
         "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
     }
 
