@@ -119,7 +119,7 @@ def genie_chat_tool(query: str) -> str:
 @tool
 def vector_search_tool(query: str, fact_types: list[str] | str | None = None) -> str:
     """
-    Semantic search over pre-generated facility facts.
+    Semantic search over pre-generated facility facts stored in the facility_facts table.
 
     Best for: "Which facilities provide cardiac surgery?", "has MRI?",
     "similar to [name]", specialized services, capabilities, equipment.
@@ -127,9 +127,19 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
     Args:
         query:      Natural language search query
         fact_types: Optional filter to specific fact types.
-                    Valid values: procedure, capability, specialty, summary, equipment.
-                    Pass a list like ["procedure"] or a single string like "procedure".
-                    If None, searches across all fact types.
+                    Valid values and what each type contains:
+                      - "specialty"   : Medical specialty tags a facility offers
+                                        (e.g., internalMedicine, dentistry, gynecologyAndObstetrics)
+                      - "procedure"   : Specific medical procedures performed in plain text
+                                        (e.g., "Offers teeth whitening", "fertility management")
+                      - "equipment"   : Physical devices/machines on-site
+                                        (e.g., "Automatic changeover oxygen manifold", "operating room equipment")
+                      - "capability"  : Operational context — hours, departments, contact info,
+                                        accreditations, social media, 24/7 availability
+                      - "summary"     : One-line facility profile: type, location, affiliation,
+                                        general description
+                    Pass a list like ["procedure", "equipment"] or a single string like "specialty".
+                    If None, searches across all fact types (use only when cross-type context is needed).
     """
     from databricks_langchain import VectorSearchRetrieverTool
 
@@ -550,6 +560,27 @@ IS_ANALYTIC = True if ANY of these keywords appear:
 | IS_SEMANTIC + IS_ANALYTIC           | vector_search_tool, then medical_agent_tool                 |
 | ALL THREE (no geo)                  | genie_chat_tool → vector_search_tool → medical_agent_tool   |
 
+### Step 2.5 — Vector Search Fact-Type Guide (ALWAYS follow this when calling vector_search_tool):
+
+Each row in `facility_facts` has exactly ONE `fact_type`. Choose `fact_types` based strictly on
+what the user is asking about. Do NOT over-fetch — only include types that are directly relevant:
+
+| User is asking about...                              | fact_types to use                      |
+|------------------------------------------------------|----------------------------------------|
+| What specialties a facility offers                   | ["specialty"]                          |
+| What procedures a facility performs                  | ["procedure"]                          |
+| What equipment a facility has                        | ["equipment"]                          |
+| A facility's opening hours, contact, departments     | ["capability"]                         |
+| General overview / type / location of a facility     | ["summary"]                            |
+| Whether procedures match equipment (plausibility)    | ["procedure", "equipment"]             |
+| Whether specialties match procedures                 | ["specialty", "procedure"]             |
+| Full clinical profile (deep validation / audit)      | ["specialty", "procedure", "equipment"]|
+| Contradictions or inconsistencies across all facts   | None (search across all types)         |
+| Similarity search ("hospitals like X")               | ["summary", "capability"]              |
+
+NEVER pass all 5 fact_types unless contradictions/inconsistencies across all categories are
+explicitly asked for. Always pick the minimal relevant set.
+
 ### Step 2.5 — Geospatial Protocol (applies when IS_GEOSPATIAL = True):
 
 If the user asks for a physical distance search (e.g., "within 50 km of Accra"), you do NOT need to look up exact coordinates.
@@ -573,7 +604,7 @@ Then follow this 3-step reasoning protocol:
   1. Use genie_chat_tool to fetch the raw facility profile:
      → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, no_doctors, social_links
      → Filter to the relevant facilities (e.g., clinics, pharmacies, dentists)
-  2. Use vector_search_tool with fact_type=["specialty", "equipment", "procedure", "summary", "capability"] to retrieve the detailed fact_text for those facilities.
+  2. Use vector_search_tool strictly with the relevant `fact_types` based on what needs verification (e.g., `fact_types=["specialty", "procedure"]` if checking specialties, or `fact_types=["equipment"]` if only checking equipment). Do not blindly query all fact types if they are not needed.
   3. Apply YOUR OWN medical expertise:
      → Is this facility_type capable of these procedures given real-world medical standards?
      → Does this equipment require specialist support that is not present?
