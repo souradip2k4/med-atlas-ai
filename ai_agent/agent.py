@@ -218,8 +218,13 @@ def medical_agent_tool(
     query: str,
     facility_name: str | None = None,
     facility_id: str | None = None,
+    facility_ids: list[str] | None = None,
     region: str | None = None,
     city: str | None = None,
+    operator_type: str | None = None,
+    organization_type: str | None = None,
+    facility_type: str | None = None,
+    affiliation_type: str | None = None,
 ) -> str:
     """
     Medical domain reasoning and anomaly detection on facility data.
@@ -227,55 +232,44 @@ def medical_agent_tool(
     Uses the analyze_medical_query UC function on facility_records
     to detect data quality issues and anomalies.
 
-    Returns data for 6 analysis types:
+    Returns data for 5 analysis types:
       1. regional_coverage        — per-region service coverage arrays for LLM gap analysis
-      2. duplicate_facility       — exact same facility name occurring multiple times
-      3. anomaly_flagging         — outlier capacity/doctor counts (3 std devs)
-      4. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
-      5. facility_profile_counts  — raw per-facility counts for LLM gap classification
-      6. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
+      2. anomaly_flagging         — outlier capacity/doctor counts (3 std devs, global baseline)
+      3. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
+      4. facility_profile_counts  — raw per-facility counts for LLM gap classification
+      5. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
                                     (also handles feature/equipment mismatch queries)
                                     (batched internally, 8 facilities per LLM call)
-                                    REQUIRES: region parameter
+                                    REQUIRES: region OR facility_name OR facility_id
 
-    NOTE — For classification/breakdown queries (facility_type, operator_type, affiliation_types,
-      ngo counts, public vs private breakdown) — use genie_chat_tool instead.
-      These are enum fields; Genie handles them with simple GROUP BY aggregations.
+    NOTE — For classification/breakdown queries use genie_chat_tool instead.
+    NOTE — For contradiction detection, use vector_search_tool instead.
 
-    NOTE — For contradiction detection, use vector_search_tool instead:
-      Contradictions/inconsistencies are handled dynamically via semantic search,
-      not by this tool. Route 'contradict', 'inconsistent' queries to vector_search_tool.
+    IMPORTANT — For branches that return raw data (types 1, 3, 6), YOU must synthesize
+      a meaningful analysis — do NOT just echo the raw data.
 
-    IMPORTANT — For branches that return raw data (types 1, 3, 6), YOU must:
-      • Read the 'note' field in each finding and apply medical/domain reasoning
-      • Classify NGO levels, identify service gaps, assess overlap, or classify gap types
-      • Evaluate if procedure-to-equipment ratios are medically implausible
-      • Do NOT just echo the raw data — synthesize a meaningful analysis
-
-    IMPORTANT — For deep_validation (type 7):
-      • Requires 'region' parameter (mandatory). 'city' is optional.
-      • The tool internally batches facilities (8 at a time) and calls the LLM
-        for medical consistency analysis. Results are pre-analyzed.
-      • You just need to present the aggregated validation results.
-
-    Routed to genie_chat_tool instead (NOT this tool):
-      - Oversupply/scarcity queries → genie_chat_tool (e.g., "how many facilities offer X?")
-      - Specialist distribution    → genie_chat_tool (queries regional_insights table directly)
-      - Web/description quality    → genie_chat_tool (e.g., "which facilities have websites?")
+    SCOPE FILTERS (all optional — apply ONLY what the user explicitly mentioned):
+        facility_ids:      List of facility IDs (e.g., from geospatial_query_tool output).
+                           Pass this when the user asks for anomaly/validation analysis
+                           on a set of facilities returned by a radius/geospatial search.
+        operator_type:     'private' | 'public'
+        organization_type: 'facility' | 'ngo'
+        facility_type:     'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
+        affiliation_type:  'faith-tradition' | 'government' | 'community' |
+                           'philanthropy-legacy' | 'academic'
+        region:            Exact region/state name (e.g., 'Northern', 'Greater Accra').
+                           Required for deep_validation.
+        city:              City name (optional, narrows the scope within the region).
+        facility_id:       Restrict analysis to a single facility by its UUID.
+        facility_name:     Partial name match (e.g., 'Korle-Bu').
 
     Trigger keywords: "anomal", "ngo", "classify", "gap", "unmet",
-    "outlier", "flag", "duplicate", "abnormal", "red flag",
+    "outlier", "flag", "abnormal", "red flag",
     "problem type", "workforce", "staffing", "overlapping", "corrobor",
     "mismatch", "feature mismatch", "procedure count", "equipment count",
     "validate", "consistency", "verify claim", "capable", "infrastructure".
 
     NOT for: oversupply, scarcity, specialist distribution, web presence → use genie_chat_tool.
-
-    Args:
-        query:       Analysis question (e.g., "detect anomalies", "validate claims")
-        facility_id: Optional. Restrict analysis to one facility.
-        region:      Optional. Required for deep validation. Exact region name (e.g., "Northern").
-        city:        Optional. Narrow deep validation to a specific city within the region.
 
     Returns: Structured JSON with findings + optional 'note' fields for LLM reasoning.
     """
@@ -287,10 +281,20 @@ def medical_agent_tool(
         args["facility_name"] = facility_name
     if facility_id:
         args["facility_id"] = facility_id
+    if facility_ids:
+        args["facility_ids"] = json.dumps(facility_ids)
     if region:
         args["region"] = region
     if city:
         args["city"] = city
+    if operator_type:
+        args["operator_type"] = operator_type
+    if organization_type:
+        args["organization_type"] = organization_type
+    if facility_type:
+        args["facility_type"] = facility_type
+    if affiliation_type:
+        args["affiliation_type"] = affiliation_type
 
     try:
         uc = UCFunctionToolkit(
@@ -397,6 +401,12 @@ def geospatial_query_tool(
     condition: str | None = None,
     analysis_type: str = "nearby",
     urban_hubs: list[str] | None = None,
+    region: str | None = None,
+    city: str | None = None,
+    operator_type: str | None = None,
+    organization_type: str | None = None,
+    facility_type: str | None = None,
+    affiliation_type: str | None = None,
 ) -> str:
     """
     Geospatial facility search using ST_DistanceSpheroid on the WGS84 spheroid.
@@ -408,6 +418,15 @@ def geospatial_query_tool(
                       the given condition.
       "urban_rural" — Returns distance from each facility to its nearest hub.
                       If 'urban_hubs' is not provided, defaults to Ghana's 5 major.
+
+    SCOPE FILTERS (all optional — apply ONLY what the user explicitly mentioned):
+        region:            Restrict to a specific state/region (e.g., 'Greater Accra').
+        city:              Restrict to a specific city.
+        operator_type:     'private' | 'public'
+        organization_type: 'facility' | 'ngo'
+        facility_type:     'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
+        affiliation_type:  'faith-tradition' | 'government' | 'community' |
+                           'philanthropy-legacy' | 'academic'
 
     Args:
         ref_lat:            Latitude of reference location (optional, if known).
@@ -453,6 +472,19 @@ def geospatial_query_tool(
     }
     if condition:
         payload["condition"] = condition
+    # Scope filters — propagate only when user explicitly mentioned them
+    if region:
+        payload["region"] = region
+    if city:
+        payload["city"] = city
+    if operator_type:
+        payload["operator_type"] = operator_type
+    if organization_type:
+        payload["organization_type"] = organization_type
+    if facility_type:
+        payload["facility_type"] = facility_type
+    if affiliation_type:
+        payload["affiliation_type"] = affiliation_type
 
     # Dynamically geocode urban hubs if requested
     if analysis_type == "urban_rural":
@@ -578,7 +610,7 @@ IS_SEMANTIC = True if ANY of these keywords appear:
 
 IS_ANALYTIC = True if ANY of these keywords appear:
   "anomal", "gap", "unmet", "outlier", "flag",
-  "duplicate", "abnormal", "red flag", "problem type", "workforce",
+  "abnormal", "red flag", "problem type", "workforce",
   "staffing", "correlat", "overlapping", "mismatch",
   "feature mismatch", "procedure count", "equipment count", "signal",
   "validate", "consistency", "verify claim", "capable", "infrastructure",
@@ -629,8 +661,24 @@ Simply pass `reference_location="Accra"` to the `geospatial_query_tool`, and it 
 **Choosing `analysis_type`:**
   • "nearby"      — user asks "within X km" or "near" a location. Provide `reference_location` and `radius_km`.
   • "cold_spot"   — user asks about regions lacking a service, geographic gaps.
-  • "urban_rural" — user asks about urban vs rural service distribution. You may optionally pass a list of `urban_hubs` 
+  • "urban_rural" — user asks about urban vs rural service distribution. You may optionally pass a list of `urban_hubs`
                     (e.g., `urban_hubs=["Accra", "Kumasi"]`) to dynamically define the urban centers for this search.
+
+**Scope Filters for Geospatial Tool:**
+If the user specifies any of the following in their query, extract and pass them to `geospatial_query_tool`:
+  • operator_type:     'private' or 'public' (e.g., "only public hospitals")
+  • organization_type: 'facility' or 'ngo' (e.g., "only NGO facilities")
+  • facility_type:     'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
+  • affiliation_type:  'faith-tradition' | 'government' | 'community' | 'philanthropy-legacy' | 'academic'
+  • region:            State/region name (e.g., "Greater Accra" — in addition to or instead of reference_location)
+  • city:              City name
+
+**IS_GEOSPATIAL + IS_ANALYTIC Pipeline (CRITICAL — "anomalies within 50km of Accra"):**
+When the query is BOTH geospatial AND analytic:
+  1. Call `geospatial_query_tool` first to get a list of facilities matching the radius search.
+  2. From its JSON output, extract ALL facility_id values from the `facilities` array as a Python list.
+  3. Call `medical_agent_tool` with `facility_ids=["id1", "id2", ...]` passing the extracted list.
+  This ensures the anomaly/validation analysis runs ONLY on the exact facilities found within the radius.
 
 ### Step 2.5 — Medical Reasoning Protocol (applies when query involves medical domain judgment):
 
@@ -675,6 +723,7 @@ consistency, infrastructure verification, OR procedure-to-equipment mismatches:
      → region: the exact region name (e.g., "Northern") OR
      → facility_name: the specific facility name (e.g., "Korle-Bu Teaching Hospital")
      → city: the city name if mentioned (optional)
+     → Also pass any enum filters the user mentioned (operator_type, facility_type, etc.)
   3. If the user does NOT mention a region OR a specific facility, you MUST ask them
      to specify one before calling the tool. Do NOT call the tool empty.
   4. The tool will internally batch-process all matching facilities
@@ -733,9 +782,23 @@ After receiving each tool result, decide:
 • DO NOT include internal `facility_id`s, UUIDs, or database primary keys in the final Markdown output. Keep it clean and user-friendly.
 • DO NOT mention internal tools (e.g., "vector-search", "Genie", "medical-agent") or technical query mechanisms in your response. Present your answers naturally to the user.
 • If you called multiple tools, synthesize their results together into a single cohesive summary.
-• IMPORTANT: If a tool returns an excessively large list of results (e.g., more than 15-20), DO NOT attempt to list every single facility in markdown if you feel it is not required after reading and analyzing the results. In this case, provide a summary of the total count, highlight key patterns, and list only a sample of the top 15-20 most prominent or relevant ones to avoid overwhelming the user and exceeding generative token limits. If you think listing all the facilities is required, then list them.
+• IMPORTANT: If a tool (like geospatial search or medical anomaly flagging or the deep validation) returns a list of MORE THAN 25-30 facilities, DO NOT attempt to list them all in a table. It exceeds token limits and overwhelms the user. Instead, provide a high-level summary that strictly uses this format:
+  
+  Answer: There are [Total Number] [Facility Type/Hospitals] [condition/radius/finding].
+  
+  Key findings:
+  [Name] is the closest [or most extreme anomaly], located [distance/value] away.
+  The farthest [or least extreme] within the [condition] is [Name], located [distance/value] away.
+  Other notable facilities in the area include [Name 1], [Name 2], and [Name 3].
+  
+  Medical context: [1-2 sentences on the medical implications of this density/anomaly, e.g. Access to healthcare is crucial...]
+  
+  Data sources: The data was obtained using the [tool name] which returned a list of facilities [condition].
+  
+  Limitations: The data may not be comprehensive or up-to-date... [List relevant limitations like straight-line distance, missing data mentioned in data_coverage_summary, etc.]
+
+• If the tool returns 25 or fewer facilities, display them comprehensively in a structured markdown table.
 • Cite specific facility names and regions.
-• Format tabular results as markdown tables.
 • If no results are found, say so clearly and suggest trying a different approach.
 
 ### Step 5 — Missing Information:
@@ -929,24 +992,6 @@ class _ToolCallTracker:
                     tables_accessed.add("facility_facts")
                 if finding_type in ("regional_coverage",):
                     tables_accessed.add("regional_insights")
-                # ── duplicate_facility: SQL returns a pair per finding ──────────────
-                # Fields: facility_1_id, facility_1_name, facility_2_id, facility_2_name
-                if finding_type == "duplicate_facility":
-                    for prefix in ("facility_1", "facility_2"):
-                        fid = f.get(f"{prefix}_id")
-                        fname = f.get(f"{prefix}_name")
-                        if fid or fname:
-                            sources.append({
-                                "source_type": "facility_records",
-                                "finding_type": finding_type,
-                                "facility_id": fid,
-                                "facility_name": fname,
-                                "latitude": None,
-                                "longitude": None,
-                                "severity": f.get("severity"),
-                                "note": "Duplicate facility record detected",
-                            })
-                    continue
 
                 # ── All other finding types (generic single-facility or regional) ────
                 source: dict[str, Any] = {
