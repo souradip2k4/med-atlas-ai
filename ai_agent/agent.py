@@ -491,7 +491,47 @@ def geospatial_query_tool(
             function_names=[f"{CATALOG}.{SCHEMA}.find_facilities_nearby"]
         )
         uc_fn = uc.tools[0]
-        return uc_fn.invoke({"query_json": json.dumps(payload)})
+        raw_result = uc_fn.invoke({"query_json": json.dumps(payload)})
+
+        # UCFunctionToolkit wraps the return in {"format": "SCALAR", "value": "<json-string>"}.
+        # Unwrap it so the LLM receives clean, well-formed JSON instead of an escaped string.
+        outer = json.loads(raw_result)
+        if isinstance(outer, dict) and "value" in outer and "format" in outer:
+            inner = outer["value"]
+            outer = json.loads(inner) if isinstance(inner, str) else inner
+
+        # The SQL map_from_arrays forces all values to STRING (all values must share one type).
+        # Rehydrate numeric metadata fields back to proper Python numbers.
+        _float_fields = ("reference_lat", "reference_lon", "radius_km")
+        _int_fields   = ("total_facilities_found",)
+        for f in _float_fields:
+            if f in outer and isinstance(outer[f], str):
+                try:
+                    outer[f] = float(outer[f])
+                except (ValueError, TypeError):
+                    pass
+        for f in _int_fields:
+            if f in outer and isinstance(outer[f], str):
+                try:
+                    outer[f] = int(outer[f])
+                except (ValueError, TypeError):
+                    pass
+
+        # The SQL function double-encodes the facilities/cold_spot arrays as a JSON string.
+        # Parse it so the result is a proper nested object (not an escaped string).
+        for key in ("facilities", "cold_spot_regions"):
+            raw_val = outer.get(key)
+            if isinstance(raw_val, str):
+                try:
+                    outer[key] = json.loads(raw_val)
+                except (json.JSONDecodeError, TypeError):
+                    pass  # leave as-is if not valid JSON
+
+        # Remove empty/null condition_filter to keep the payload lean.
+        if outer.get("condition_filter") in ("", "none", None):
+            outer.pop("condition_filter", None)
+
+        return json.dumps(outer, indent=2)
     except Exception as exc:
         return f"[Geospatial Query Error] {exc}"
 
@@ -690,17 +730,16 @@ After receiving each tool result, decide:
 
 • You MUST ALWAYS provide a final, human-readable response in Markdown format after your tool calls are complete.
 • NEVER respond with raw JSON, raw tool outputs, or unformatted text as your final answer.
+• DO NOT include internal `facility_id`s, UUIDs, or database primary keys in the final Markdown output. Keep it clean and user-friendly.
+• DO NOT mention internal tools (e.g., "vector-search", "Genie", "medical-agent") or technical query mechanisms in your response. Present your answers naturally to the user.
 • If you called multiple tools, synthesize their results together into a single cohesive summary.
-• IMPORTANT: If `vector_search_tool` returns a large number of results (e.g. 10 to 45+ facilities), DO NOT drop, skip, or "forget" them. You MUST systematically list or summarize EVERY single matched facility in your response (e.g. using a clear markdown table or bulleted list). Do not arbitrarily truncate the list.
+• IMPORTANT: If a tool returns an excessively large list of results (e.g., more than 15-20), DO NOT attempt to list every single facility in markdown if you feel it is not required after reading and analyzing the results. In this case, provide a summary of the total count, highlight key patterns, and list only a sample of the top 15-20 most prominent or relevant ones to avoid overwhelming the user and exceeding generative token limits. If you think listing all the facilities is required, then list them.
 • Cite specific facility names and regions.
 • Format tabular results as markdown tables.
 • If no results are found, say so clearly and suggest trying a different approach.
 
-### Step 5 — Smart Map Context Handling:
-The user's application may silently append map context to their prompt like `<MAP_CONTEXT: Region=Volta, City=Ho>`.
-Rule for using this context:
-- ONLY use the `MAP_CONTEXT` if the user is asking an anomaly, feature mismatch, or reliability validation question AND they did not explicitly mention a region/city in their query text.
-- For all other queries (global aggregations, semantic definitions, etc.), completely IGNORE the `MAP_CONTEXT`. Do not restrict global queries just because the map is zoomed into a region.
+### Step 5 — Missing Information:
+If the user asks a question that requires a region or city (such as finding nearby facilities, generating a specific regional anomaly report, or filtering by distance) but they DO NOT mention any region or city in their prompt, you MUST explicitly ask the user to provide the region or city before proceeding. Do NOT assume a default region. Use your interactive capability to clarify their request.
 """
 
 
@@ -710,7 +749,7 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence, add_messages]
 
 
-llm = ChatDatabricks(endpoint=LLM_ENDPOINT, temperature=0.1, max_tokens=2048)
+llm = ChatDatabricks(endpoint=LLM_ENDPOINT, temperature=0.1, max_tokens=16384)
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
 
@@ -1268,9 +1307,34 @@ class MedAtlasAgent(ResponsesAgent):
 
     def predict_with_citations(self, request: ResponsesAgentRequest) -> _AgentResult:
         """Run the agent and return both the response AND structured citations."""
-        tracker = _ToolCallTracker()
-        events = self._run_graph(request, tracker)
-        outputs = [e.item for e in events if e.type == "response.output_item.done"]
+        from mlflow.entities import SpanType
+
+        # Extract user question for the MLflow UI
+        user_input = ""
+        if request.input:
+            last_in = request.input[-1]
+            user_input = getattr(last_in, "content", "")
+
+        # Wrap execution in a root span formatted exactly how MLflow's Chat UI expects.
+        with mlflow.start_span(name="MedAtlas Agent", span_type=SpanType.CHAT_MODEL) as root_span:
+            root_span.set_inputs({"messages": [{"role": "user", "content": user_input}]})
+
+            tracker = _ToolCallTracker()
+            events = self._run_graph(request, tracker)
+            outputs = [e.item for e in events if e.type == "response.output_item.done"]
+
+            # Extract final markdown response for the MLflow UI
+            last_message = ""
+            for out in reversed(outputs):
+                if out.type == "message" and out.role == "assistant":
+                    if getattr(out, "content", None) and isinstance(out.content, list):
+                        last_message = getattr(out.content[0], "text", "")
+                    break
+
+            root_span.set_outputs({
+                "choices": [{"message": {"role": "assistant", "content": last_message}}]
+            })
+
         return _AgentResult(
             response=ResponsesAgentResponse(output=outputs),
             citations=tracker.get_citations(),

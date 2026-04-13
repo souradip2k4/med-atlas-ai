@@ -74,7 +74,7 @@ def _format_output_item(out: Any) -> dict[str, Any]:
         if isinstance(raw_output, str):
             try:
                 parsed = json.loads(raw_output)
-                item["output"] = json.dumps(parsed, indent=2)
+                item["output"] = parsed          # ← keep as native Python object, not re-stringified
                 item["output_format"] = "json"
             except Exception:
                 item["output"] = raw_output

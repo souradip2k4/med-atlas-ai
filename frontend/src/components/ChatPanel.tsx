@@ -18,7 +18,6 @@ export function ChatPanel() {
     chatOpen,
     chatEntries,
     viewingCitationsId,
-    filters,
     toggleChat,
     addChatEntry,
     updateChatEntry,
@@ -46,13 +45,7 @@ export function ChatPanel() {
     if (!userText.trim() || isAnyLoading) return;
 
     const entryId = crypto.randomUUID();
-    let promptWithContext = userText.trim();
-
-    // Map context injection for anomaly/validation queries
-    if (filters.region) {
-      const cityCtx = filters.city ? `, City=${filters.city}` : '';
-      promptWithContext += `\n<MAP_CONTEXT: Region=${filters.region}${cityCtx}>`;
-    }
+    const promptWithContext = userText.trim();
 
     addChatEntry({
       id: entryId,
