@@ -11,6 +11,7 @@ interface MapCanvasProps {
   filters: SearchFilters;
   facilities: FacilitySummary[];
   sidebarOpen: boolean;
+  chatOpen: boolean;
   selectedFacilityPreview: FacilitySummary | null;
   selectedFacility: FacilityProfile | null | undefined;
   isFacilityLoading: boolean;
@@ -105,6 +106,7 @@ export function MapCanvas({
   filters,
   facilities,
   sidebarOpen,
+  chatOpen,
   selectedFacilityPreview,
   selectedFacility,
   isFacilityLoading,
@@ -394,7 +396,7 @@ export function MapCanvas({
     return () => {
       window.clearTimeout(resizeId);
     };
-  }, [sidebarOpen]);
+  }, [chatOpen, sidebarOpen]);
 
   useEffect(() => {
     const currentMap = mapRef.current;

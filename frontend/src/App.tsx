@@ -21,6 +21,7 @@ function App() {
   const {
     activeDropdown,
     advancedOpen,
+    chatOpen,
     filters,
     hoveredFacilityId,
     sidebarOpen,
@@ -164,6 +165,7 @@ function App() {
             filters={filters}
             facilities={facilities}
             sidebarOpen={sidebarOpen}
+            chatOpen={chatOpen}
             selectedFacilityPreview={selectedFacilityPreview}
             selectedFacility={facilityQuery.data}
             isFacilityLoading={facilityQuery.isLoading || facilityQuery.isFetching}
@@ -204,8 +206,9 @@ function App() {
         />
 
         <ChatFab />
-        <ChatPanel />
       </main>
+
+      {chatOpen ? <ChatPanel /> : null}
     </div>
   );
 }

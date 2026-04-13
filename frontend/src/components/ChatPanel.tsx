@@ -1,7 +1,14 @@
 import { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { SendHorizontal, RotateCcw, X } from 'lucide-react';
+import {
+  BotMessageSquare,
+  SendHorizontal,
+  RotateCcw,
+  Sparkles,
+  Square,
+  X,
+} from 'lucide-react';
 import { useUIStore } from '../store/ui-store';
 import { invokeAgent } from '../lib/api';
 import { ChatCitationsView } from './ChatCitationsView';
@@ -29,6 +36,8 @@ export function ChatPanel() {
   const [inputVal, setInputVal] = useState('');
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeRequestIdRef = useRef<string | null>(null);
+  const stoppedRequestIdsRef = useRef<Set<string>>(new Set());
 
   const isAnyLoading = chatEntries.some((e) => e.isLoading);
   const viewedCitations = chatEntries.find((e) => e.id === viewingCitationsId)?.citations;
@@ -46,6 +55,7 @@ export function ChatPanel() {
 
     const entryId = crypto.randomUUID();
     const promptWithContext = userText.trim();
+    activeRequestIdRef.current = entryId;
 
     addChatEntry({
       id: entryId,
@@ -62,6 +72,13 @@ export function ChatPanel() {
 
     try {
       const response: AgentResponse = await invokeAgent(promptWithContext);
+      if (stoppedRequestIdsRef.current.has(entryId)) {
+        stoppedRequestIdsRef.current.delete(entryId);
+        if (activeRequestIdRef.current === entryId) {
+          activeRequestIdRef.current = null;
+        }
+        return;
+      }
       
       const assistantMsg = response.output?.find((m) => m.role === 'assistant');
       const text = assistantMsg?.content || 'No response generated.';
@@ -99,15 +116,47 @@ export function ChatPanel() {
         citations: response.citations,
         referencedFacilities: markers,
       });
+      if (activeRequestIdRef.current === entryId) {
+        activeRequestIdRef.current = null;
+      }
       
     } catch (err) {
+      if (stoppedRequestIdsRef.current.has(entryId)) {
+        stoppedRequestIdsRef.current.delete(entryId);
+        if (activeRequestIdRef.current === entryId) {
+          activeRequestIdRef.current = null;
+        }
+        return;
+      }
       console.error('Agent invocation error:', err);
       updateChatEntry(entryId, {
         isLoading: false,
         isError: true,
         errorMessage: err instanceof Error ? err.message : 'An unknown error occurred.',
       });
+      if (activeRequestIdRef.current === entryId) {
+        activeRequestIdRef.current = null;
+      }
     }
+  };
+
+  const handleStop = () => {
+    const activeId = activeRequestIdRef.current;
+    if (!activeId) {
+      return;
+    }
+
+    stoppedRequestIdsRef.current.add(activeId);
+    updateChatEntry(activeId, {
+      isLoading: false,
+      assistantMessage: null,
+      citations: null,
+      referencedFacilities: [],
+      isError: false,
+      errorMessage: null,
+    });
+    setAgentMarkers([]);
+    activeRequestIdRef.current = null;
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -120,7 +169,7 @@ export function ChatPanel() {
   if (!chatOpen) return null;
 
   return (
-    <div className="absolute bottom-6 right-7 z-[20] flex w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-[24px] border border-border-white-strong bg-surface-panel-strong/98 shadow-panel-strong backdrop-blur-[16px] max-[920px]:bottom-auto max-[920px]:top-4 max-[920px]:h-[calc(100vh-140px)] min-[921px]:h-[600px] max-h-[72vh] animate-chat-in">
+    <aside className="absolute inset-x-3 bottom-3 top-3 z-[40] flex min-w-0 flex-col overflow-hidden rounded-[24px] border border-border-white-strong bg-surface-panel-strong/98 shadow-panel-strong backdrop-blur-[16px] animate-chat-in min-[921px]:relative min-[921px]:inset-auto min-[921px]:z-20 min-[921px]:h-dvh min-[921px]:w-[45vw] min-[921px]:min-w-[480px] min-[921px]:max-w-[720px] min-[921px]:shrink-0 min-[921px]:rounded-none min-[921px]:border-y-0 min-[921px]:border-r-0 min-[921px]:border-l min-[921px]:border-border-app min-[921px]:shadow-[-18px_0_40px_rgba(19,42,73,0.08)]">
       {viewingCitationsId && viewedCitations ? (
         <ChatCitationsView 
           citations={viewedCitations} 
@@ -128,10 +177,19 @@ export function ChatPanel() {
         />
       ) : (
         <>
-          <div className="flex shrink-0 items-center justify-between border-b border-border-app px-5 py-[14px]">
-            <h2 className="text-[0.88rem] font-bold uppercase tracking-[0.16em] text-accent-700">
-              Med-Atlas AI
-            </h2>
+          <div className="flex shrink-0 items-center justify-between border-b border-border-app px-6 py-4">
+            <div className="flex items-center gap-3">
+              <div className="relative flex size-11 items-center justify-center rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(79,141,247,0.2),rgba(79,141,247,0.06)_58%,transparent_72%)] text-accent-700">
+                <span className="absolute inset-1 rounded-full border border-accent-100/90 animate-pulse" />
+                <BotMessageSquare className="relative z-[1] size-5" strokeWidth={2.2} />
+              </div>
+              <div>
+                <div className="text-[0.74rem] font-bold uppercase tracking-[0.2em] text-accent-700">
+                  Assistant
+                </div>
+                <div className="text-sm text-ink-500">Med-Atlas AI copilot</div>
+              </div>
+            </div>
             <div className="flex items-center gap-1.5">
               {chatEntries.length > 0 && (
                 <button
@@ -156,13 +214,20 @@ export function ChatPanel() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-5 py-4 scrollbar-thin">
+          <div className="flex-1 overflow-y-auto px-6 py-5 scrollbar-thin">
             {chatEntries.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center opacity-80">
-                <div className="mb-4 size-16 rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(63,122,234,0.15),transparent_70%)]" />
-                <h3 className="mb-1.5 text-lg font-semibold text-ink-900">How can I help?</h3>
-                <p className="mb-8 text-ui text-ink-500 max-w-[260px]">
-                  Ask me to find specific equipment, analyze regional gaps, or validate medical claims.
+                <div className="relative mb-5 flex size-20 items-center justify-center">
+                  <span className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(79,141,247,0.2),rgba(79,141,247,0.04)_68%,transparent_72%)] animate-pulse" />
+                  <span className="absolute inset-[10px] rounded-full border border-accent-100/90 animate-[spin_12s_linear_infinite]" />
+                  <span className="absolute inset-[18px] rounded-full bg-white/80 shadow-[0_12px_28px_rgba(79,141,247,0.12)]" />
+                  <Sparkles className="relative z-[1] size-7 text-accent-700" strokeWidth={2} />
+                </div>
+                <h3 className="mb-2 text-[1.55rem] font-semibold tracking-[-0.03em] text-ink-900">
+                  Ask the healthcare assistant
+                </h3>
+                <p className="mb-8 max-w-[360px] text-[0.98rem] leading-7 text-ink-500">
+                  Search equipment, trace service gaps, compare facilities, and validate claims against the Ghana medical dataset.
                 </p>
                 <div className="flex w-full flex-col gap-2">
                   {SUGGESTED_PROMPTS.map((prompt) => (
@@ -236,7 +301,7 @@ export function ChatPanel() {
             )}
           </div>
 
-          <div className="shrink-0 border-t border-border-app bg-white/60 p-4">
+          <div className="shrink-0 border-t border-border-app bg-white/60 p-5">
             <div className="relative flex items-end">
               <input
                 ref={inputRef}
@@ -249,17 +314,21 @@ export function ChatPanel() {
               />
               <button
                 type="button"
-                disabled={isAnyLoading || !inputVal.trim()}
-                onClick={() => handleSubmit(inputVal)}
+                disabled={isAnyLoading ? false : !inputVal.trim()}
+                onClick={isAnyLoading ? handleStop : () => handleSubmit(inputVal)}
                 className="absolute bottom-1 right-1 flex size-[38px] items-center justify-center rounded-full bg-accent-600 text-white transition hover:bg-accent-700 disabled:bg-ink-300 disabled:opacity-50"
-                aria-label="Send message"
+                aria-label={isAnyLoading ? 'Stop response' : 'Send message'}
               >
-                <SendHorizontal className="size-4" strokeWidth={2.5} />
+                {isAnyLoading ? (
+                  <Square className="size-4 fill-current" strokeWidth={2.5} />
+                ) : (
+                  <SendHorizontal className="size-4" strokeWidth={2.5} />
+                )}
               </button>
             </div>
           </div>
         </>
       )}
-    </div>
+    </aside>
   );
 }

@@ -10,7 +10,9 @@ export function ChatFab() {
   return (
     <button
       type="button"
-      className="absolute bottom-8 right-7 z-[15] flex h-14 w-14 items-center justify-center rounded-full bg-white/90 text-accent-700 shadow-overlay backdrop-blur-[12px] transition-all hover:scale-105 hover:bg-white min-[921px]:flex"
+      className={`absolute bottom-8 right-7 z-[25] flex h-14 w-14 items-center justify-center rounded-full bg-white/92 text-accent-700 shadow-overlay backdrop-blur-[12px] transition-all hover:scale-105 hover:bg-white ${
+        chatOpen ? 'min-[921px]:hidden' : ''
+      }`}
       onClick={toggleChat}
       aria-label={chatOpen ? 'Close chat' : 'Open Med-Atlas AI chat'}
     >

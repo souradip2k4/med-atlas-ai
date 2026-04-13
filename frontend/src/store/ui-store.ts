@@ -67,7 +67,7 @@ export const useUIStore = create<UIState>()(
       selectedFacilityId: null,
       viewportBbox: null,
       filters: DEFAULT_FILTERS,
-      chatOpen: false,
+      chatOpen: true,
       chatEntries: [],
       viewingCitationsId: null,
       agentMarkers: [],
