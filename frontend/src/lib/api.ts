@@ -13,6 +13,7 @@ import type {
   MapMetadata,
   MapSearchPayload,
   SearchResponse,
+  AgentResponse,
 } from './types';
 
 const api = axios.create({
@@ -92,4 +93,11 @@ export function getHighlightFeature(result: GeocodeResult | null) {
   }
 
   return bboxToPolygon(result.bbox);
+}
+
+export async function invokeAgent(userMessage: string): Promise<AgentResponse> {
+  const response = await api.post<AgentResponse>('/invoke', {
+    messages: [{ role: 'user', content: userMessage }],
+  });
+  return response.data;
 }

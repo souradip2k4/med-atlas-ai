@@ -155,6 +155,41 @@
   }
 }
 
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes chat-slide {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
 @layer base {
   * {
     box-sizing: border-box;
@@ -328,5 +363,82 @@
   .mapboxgl-ctrl-group button {
     width: 36px !important;
     height: 36px !important;
+  }
+
+  /* Agent/AI Map Markers */
+  .agent-marker__halo {
+    background: rgba(240, 171, 46, 0.15);
+    animation: pulse 2.2s ease infinite;
+  }
+
+  .agent-marker__dot {
+    background: linear-gradient(180deg, #f2b84b, #d4940e);
+    box-shadow:
+      0 0 0 3px rgba(255, 255, 255, 0.96),
+      0 10px 18px rgba(180, 130, 20, 0.25);
+  }
+
+  /* Chat Markdown Styling */
+  .prose-chat {
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .prose-chat p {
+    margin-bottom: 0.75rem;
+  }
+  .prose-chat p:last-child {
+    margin-bottom: 0;
+  }
+  .prose-chat ul {
+    list-style-type: disc;
+    padding-left: 1.25rem;
+    margin-bottom: 0.75rem;
+  }
+  .prose-chat ol {
+    list-style-type: decimal;
+    padding-left: 1.25rem;
+    margin-bottom: 0.75rem;
+  }
+  .prose-chat li {
+    margin-bottom: 0.25rem;
+  }
+  .prose-chat strong {
+    font-weight: 600;
+  }
+  .prose-chat table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+  }
+  .prose-chat th,
+  .prose-chat td {
+    padding: 0.5rem;
+    border: 1px solid var(--color-border-panel);
+    text-align: left;
+  }
+  .prose-chat th {
+    background-color: var(--color-surface-panel);
+    font-weight: 600;
+  }
+  .prose-chat code {
+    background-color: var(--color-surface-panel);
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-family: inherit;
+  }
+  .prose-chat blockquote {
+    border-left: 3px solid var(--color-border-highlight);
+    padding-left: 0.75rem;
+    color: var(--color-ink-600);
+    margin-bottom: 0.75rem;
+  }
+  
+  .animate-chat-in {
+    animation: chat-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-chat-slide {
+    animation: chat-slide 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 }

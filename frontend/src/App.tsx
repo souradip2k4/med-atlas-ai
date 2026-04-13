@@ -6,6 +6,8 @@ import { AdvancedFiltersModal } from './components/AdvancedFiltersModal';
 import { FacilityDetailsPanel } from './components/FacilityDetailsPanel';
 import { ResultsSidebar } from './components/ResultsSidebar';
 import { TopSearchBar } from './components/TopSearchBar';
+import { ChatFab } from './components/ChatFab';
+import { ChatPanel } from './components/ChatPanel';
 import { fetchFacilityProfile, fetchMapMetadata, searchFacilities } from './lib/api';
 import { buildSearchPayload } from './lib/format';
 import { useUIStore } from './store/ui-store';
@@ -36,6 +38,7 @@ function App() {
     resetAdvancedFilters,
     toggleAffiliation,
     toggleSpecialty,
+    agentMarkers,
   } = useUIStore();
 
   const metadataQuery = useQuery({
@@ -166,6 +169,7 @@ function App() {
             isFacilityLoading={facilityQuery.isLoading || facilityQuery.isFetching}
             selectedFacilityId={selectedFacilityId}
             hoveredFacilityId={hoveredFacilityId}
+            agentMarkers={agentMarkers}
             onViewportChange={() => {}}
             onFacilitySelect={(facilityId) => {
               startTransition(() => {
@@ -198,6 +202,9 @@ function App() {
           onAffiliationToggle={toggleAffiliation}
           onResetAdvancedFilters={resetAdvancedFilters}
         />
+
+        <ChatFab />
+        <ChatPanel />
       </main>
     </div>
   );

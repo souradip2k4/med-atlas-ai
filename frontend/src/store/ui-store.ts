@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import type { BoundingBox, DropdownKey, SearchFilters } from '../lib/types';
+import type { BoundingBox, ChatEntry, DropdownKey, SearchFilters } from '../lib/types';
 
 const DEFAULT_FILTERS: SearchFilters = {
   region: '',
@@ -21,6 +21,22 @@ interface UIState {
   selectedFacilityId: string | null;
   viewportBbox: BoundingBox | null;
   filters: SearchFilters;
+  chatOpen: boolean;
+  chatEntries: ChatEntry[];
+  viewingCitationsId: string | null;
+  agentMarkers: Array<{
+    facility_id: string;
+    facility_name: string;
+    latitude: number;
+    longitude: number;
+  }>;
+  setChatOpen: (open: boolean) => void;
+  toggleChat: () => void;
+  addChatEntry: (entry: ChatEntry) => void;
+  updateChatEntry: (id: string, updates: Partial<ChatEntry>) => void;
+  setViewingCitationsId: (id: string | null) => void;
+  setAgentMarkers: (markers: UIState['agentMarkers']) => void;
+  clearChat: () => void;
   setActiveDropdown: (dropdown: DropdownKey) => void;
   setAdvancedOpen: (open: boolean) => void;
   toggleSidebar: () => void;
@@ -51,6 +67,25 @@ export const useUIStore = create<UIState>()(
       selectedFacilityId: null,
       viewportBbox: null,
       filters: DEFAULT_FILTERS,
+      chatOpen: false,
+      chatEntries: [],
+      viewingCitationsId: null,
+      agentMarkers: [],
+      setChatOpen: (open) => set({ chatOpen: open }),
+      toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
+      addChatEntry: (entry) =>
+        set((state) => ({
+          chatEntries: [...state.chatEntries, entry],
+        })),
+      updateChatEntry: (id, updates) =>
+        set((state) => ({
+          chatEntries: state.chatEntries.map((entry) =>
+            entry.id === id ? { ...entry, ...updates } : entry
+          ),
+        })),
+      setViewingCitationsId: (id) => set({ viewingCitationsId: id }),
+      setAgentMarkers: (markers) => set({ agentMarkers: markers }),
+      clearChat: () => set({ chatEntries: [], viewingCitationsId: null, agentMarkers: [] }),
       setActiveDropdown: (dropdown) => set({ activeDropdown: dropdown }),
       setAdvancedOpen: (open) => set({ advancedOpen: open }),
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),

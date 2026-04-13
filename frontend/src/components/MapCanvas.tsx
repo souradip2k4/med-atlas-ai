@@ -18,6 +18,12 @@ interface MapCanvasProps {
   hoveredFacilityId: string | null;
   onViewportChange: (bbox: BoundingBox | null) => void;
   onFacilitySelect: (facilityId: string) => void;
+  agentMarkers: Array<{
+    facility_id: string;
+    facility_name: string;
+    latitude: number;
+    longitude: number;
+  }>;
 }
 
 function createMarkerElement(active: boolean, label: string) {
@@ -30,6 +36,16 @@ function createMarkerElement(active: boolean, label: string) {
   element.innerHTML = active
       ? '<span class="facility-marker__halo absolute inset-0 rounded-full bg-surface-teal"></span><span class="facility-marker__dot absolute inset-[3px] rounded-full border-[3px] border-white/95 bg-[linear-gradient(180deg,#4f8df7,#2d6ce6)] shadow-[0_10px_18px_rgba(15,97,82,0.25)]"></span>'
     : '<span class="facility-marker__halo absolute inset-0 rounded-full bg-surface-teal"></span><span class="facility-marker__dot absolute inset-[5px] rounded-full border-[3px] border-white/95 bg-[linear-gradient(180deg,#22c7a7,#0d9f83)] shadow-[0_10px_18px_rgba(15,97,82,0.25)]"></span>';
+  return element;
+}
+
+function createAgentMarkerElement(label: string) {
+  const element = document.createElement('button');
+  element.type = 'button';
+  element.className = 'agent-marker relative h-7 w-7 border-0 bg-transparent';
+  element.setAttribute('aria-label', label);
+  element.innerHTML =
+    '<span class="agent-marker__halo absolute inset-0 rounded-full"></span><span class="agent-marker__dot absolute inset-[3px] rounded-full"></span>';
   return element;
 }
 
@@ -96,10 +112,12 @@ export function MapCanvas({
   hoveredFacilityId,
   onViewportChange,
   onFacilitySelect,
+  agentMarkers,
 }: MapCanvasProps) {
   const mapNodeRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
+  const agentMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const focusMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const loadingPinMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const loadingLabelMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -196,6 +214,8 @@ export function MapCanvas({
       window.removeEventListener('resize', handleWindowResize);
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
+      agentMarkersRef.current.forEach((marker) => marker.remove());
+      agentMarkersRef.current = [];
       focusMarkerRef.current?.remove();
       focusMarkerRef.current = null;
       loadingPinMarkerRef.current?.remove();
@@ -242,6 +262,37 @@ export function MapCanvas({
         markersRef.current.push(marker);
       });
   }, [facilities, hoveredFacilityId, onFacilitySelect, selectedFacilityId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    agentMarkersRef.current.forEach((marker) => marker.remove());
+    agentMarkersRef.current = [];
+
+    if (!agentMarkers || agentMarkers.length === 0) {
+      return;
+    }
+
+    agentMarkers.forEach((facility) => {
+      const element = createAgentMarkerElement(facility.facility_name);
+
+      element.addEventListener('click', () => {
+        onFacilitySelect(facility.facility_id);
+      });
+
+      const marker = new mapboxgl.Marker({
+        element,
+        anchor: 'center',
+      })
+        .setLngLat([facility.longitude, facility.latitude])
+        .addTo(map);
+
+      agentMarkersRef.current.push(marker);
+    });
+  }, [agentMarkers, onFacilitySelect]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -430,7 +481,7 @@ export function MapCanvas({
         </div>
       )}
 
-      <div className="absolute bottom-8 right-7 z-[12] grid max-w-[270px] gap-1 rounded-pill bg-white/88 px-5 py-4.5 shadow-overlay backdrop-blur-[12px] max-[920px]:hidden">
+      {/* <div className="absolute bottom-8 right-7 z-[12] grid max-w-[270px] gap-1 rounded-pill bg-white/88 px-5 py-4.5 shadow-overlay backdrop-blur-[12px] max-[920px]:hidden">
         <div className="text-overline uppercase tracking-[0.14em] text-accent-600">Focused map</div>
         <strong className="text-[1.12rem] text-ink-900">{filters.city || filters.region || 'Ghana'}</strong>
         <span className="text-ui text-ink-600">
@@ -438,7 +489,7 @@ export function MapCanvas({
             ? `Pins show ${facilities.length} healthcare profiles in the current view.`
             : 'Select a region to load facilities and place markers.'}
         </span>
-      </div>
+      </div> */}
 
       <div className="pointer-events-none absolute right-9 top-[120px] z-[5] max-[920px]:hidden">
         <div className="flex items-center justify-end gap-4 text-[rgba(25,47,77,0.08)]">

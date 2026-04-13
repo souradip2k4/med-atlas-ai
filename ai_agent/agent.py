@@ -148,8 +148,8 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 
     kwargs = {
         "index_name": VS_INDEX,
-        "num_results": 20,
-        "columns": ["fact_id", "facility_id", "fact_text", "fact_type", "source_text"],
+        "num_results": 45,
+        "columns": ["fact_id", "facility_id", "fact_text", "fact_type"],
     }
 
     if fact_types and len(fact_types) == 1:
@@ -691,9 +691,16 @@ After receiving each tool result, decide:
 • You MUST ALWAYS provide a final, human-readable response in Markdown format after your tool calls are complete.
 • NEVER respond with raw JSON, raw tool outputs, or unformatted text as your final answer.
 • If you called multiple tools, synthesize their results together into a single cohesive summary.
+• IMPORTANT: If `vector_search_tool` returns a large number of results (e.g. 10 to 45+ facilities), DO NOT drop, skip, or "forget" them. You MUST systematically list or summarize EVERY single matched facility in your response (e.g. using a clear markdown table or bulleted list). Do not arbitrarily truncate the list.
 • Cite specific facility names and regions.
 • Format tabular results as markdown tables.
 • If no results are found, say so clearly and suggest trying a different approach.
+
+### Step 5 — Smart Map Context Handling:
+The user's application may silently append map context to their prompt like `<MAP_CONTEXT: Region=Volta, City=Ho>`.
+Rule for using this context:
+- ONLY use the `MAP_CONTEXT` if the user is asking an anomaly, feature mismatch, or reliability validation question AND they did not explicitly mention a region/city in their query text.
+- For all other queries (global aggregations, semantic definitions, etc.), completely IGNORE the `MAP_CONTEXT`. Do not restrict global queries just because the map is zoomed into a region.
 """
 
 

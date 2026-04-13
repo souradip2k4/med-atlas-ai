@@ -81,3 +81,70 @@ export interface GeocodeResult {
   bbox: BoundingBox | null;
   placeName: string;
 }
+
+// ── Agent Chat Types ──────────────────────────────────────────
+
+export interface AgentOutputItem {
+  type: string;
+  content?: string;
+  role?: string;
+  tool_name?: string;
+  call_id?: string;
+  arguments?: string;
+  output?: string;
+}
+
+export interface CitationSource {
+  source_type: string;
+  fact_id?: string;
+  facility_id?: string;
+  facility_name?: string;
+  fact_type?: string;
+  excerpt?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export interface CitationStep {
+  step_index: number;
+  tool_name: string;
+  call_id: string;
+  query_used: string;
+  tables_accessed: string[];
+  sources: CitationSource[];
+}
+
+export interface CitationSummary {
+  total_sources: number;
+  facilities_referenced: string[];
+  tools_used: string[];
+  tables_accessed: string[];
+}
+
+export interface AgentCitations {
+  steps: CitationStep[];
+  summary: CitationSummary;
+}
+
+export interface AgentResponse {
+  output: AgentOutputItem[];
+  citations: AgentCitations;
+  agent: string;
+  endpoint: string;
+}
+
+export interface ChatEntry {
+  id: string;
+  userMessage: string;
+  assistantMessage: string | null;
+  citations: AgentCitations | null;
+  isLoading: boolean;
+  isError: boolean;
+  errorMessage: string | null;
+  referencedFacilities: Array<{
+    facility_id: string;
+    facility_name: string;
+    latitude: number;
+    longitude: number;
+  }>;
+}
