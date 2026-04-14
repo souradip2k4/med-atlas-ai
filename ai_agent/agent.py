@@ -16,6 +16,7 @@ Architecture:
 """
 
 import json
+import re
 import uuid
 import warnings
 import mlflow
@@ -175,7 +176,7 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 # ─── Tool 3 — Medical Agent ───────────────────────────────────────────────────
 
 # Batch size for deep validation LLM calls
-_DEEP_VALIDATION_BATCH_SIZE = 8
+_DEEP_VALIDATION_BATCH_SIZE = 15
 
 _DEEP_VALIDATION_PROMPT = """You are a medical infrastructure validator. Analyze each facility below for specialty↔procedure↔equipment consistency.
 
@@ -190,22 +191,14 @@ For EACH facility, check:
    Example mismatch: "clinic" + "Neurosurgery" specialty
 5. CAPACITY check: If capacity/no_doctors is available, is it realistic for the claimed services?
 
-For each facility that HAS ANOMALIES, return a JSON object (NOT markdown, just valid JSON):
-{
-  "facility_id": "...",
-  "facility_name": "...",
-  "status": "mismatch" | "suspicious",
-  "severity": "high" | "medium" | "low",
-  "mismatches": ["description of each mismatch found"],
-  "reasoning": "brief medical reasoning"
-}
-
-If a facility has completeness != "full", note what data is missing and
-that validation is limited for that facility.
-
-IMPORTANT: DO NOT return anything for facilities that are consistent with no anomalies. If ALL facilities in this batch are consistent, return an empty JSON array `[]`.
-
-Return ONLY a JSON array of these objects. No other text.
+For each facility WITH ANOMALIES, write a compact 2-3 line blurb:
+[SEVERITY: high|medium|low] [Facility Name] – [1-sentence description of the core mismatch]. Missing: [list key missing equipment or inconsistencies].
+[Reasoning] - [brief medical reasoning]
+Rules:
+- ONLY write blurbs for facilities with clear anomalies. Skip consistent ones entirely.
+- If a facility has completeness != "full", note missing data and that validation is limited.
+- If ALL facilities in this batch are consistent, write only: NO_ANOMALIES_IN_BATCH
+- DO NOT return JSON. Write plain text blurbs only.
 
 Facilities to analyze:
 """
@@ -342,9 +335,9 @@ def medical_agent_tool(
         if finding_type_0 in _LLM_BATCH_TYPES:
             batch_prompt_template = _LLM_BATCH_TYPES[finding_type_0]
             batch_llm = ChatDatabricks(
-                endpoint=LLM_ENDPOINT, temperature=0.0, max_tokens=2048
+                endpoint=LLM_ENDPOINT, temperature=0.0, max_tokens=4096
             )
-            all_batch_results = []
+            validation_text_lines: list[str] = []
             total_batches = math.ceil(len(findings) / _DEEP_VALIDATION_BATCH_SIZE)
 
             for i in range(0, len(findings), _DEEP_VALIDATION_BATCH_SIZE):
@@ -353,33 +346,58 @@ def medical_agent_tool(
                 batch_prompt = batch_prompt_template + json.dumps(batch, indent=2)
 
                 try:
-                    response = batch_llm.invoke([HumanMessage(content=batch_prompt)])
-                    # Try to parse structured JSON from the LLM response
-                    response_text = response.content.strip()
-                    # Handle markdown code fences if present
-                    if response_text.startswith("```"):
-                        response_text = response_text.split("\n", 1)[1]
-                        if response_text.endswith("```"):
-                            response_text = response_text[:-3].strip()
-                    batch_results = json.loads(response_text)
-                    if isinstance(batch_results, list):
-                        anomalous_only = [item for item in batch_results if str(item.get("status", "")).lower() != "consistent"]
-                        all_batch_results.extend(anomalous_only)
-                    else:
-                        if str(batch_results.get("status", "")).lower() != "consistent":
-                            all_batch_results.append(batch_results)
-                except (json.JSONDecodeError, Exception) as batch_err:
-                    # If LLM returns non-JSON, include the raw text as a fallback
-                    all_batch_results.append({
-                        "batch": batch_num,
-                        "error": f"Could not parse LLM response for batch {batch_num}/{total_batches}",
-                        "raw_response": response.content if 'response' in dir() else str(batch_err)
-                    })
+                    with mlflow.start_span(
+                        name=f"deep_validation_batch_{batch_num}/{total_batches}"
+                    ) as span:
+                        span.set_attribute("batch_num", batch_num)
+                        span.set_attribute("total_batches", total_batches)
+                        span.set_attribute("batch_size", len(batch))
+                        span.set_attribute(
+                            "facilities",
+                            [f.get("facility_name", "unknown") for f in batch]
+                        )
 
-            # Return aggregated results
+                        response = batch_llm.invoke([HumanMessage(content=batch_prompt)])
+                        response_text = response.content
+                        # Reasoning models return a list of content blocks — extract only text blocks.
+                        if isinstance(response_text, list):
+                            response_text = "\n".join(
+                                block.get("text", "") if isinstance(block, dict) else str(block)
+                                for block in response_text
+                                if not (isinstance(block, dict) and block.get("type") == "reasoning")
+                            )
+                        response_text = response_text.strip()
+
+                        has_anomalies = bool(response_text and response_text != "NO_ANOMALIES_IN_BATCH")
+                        span.set_attribute("anomalies_found", has_anomalies)
+
+                        # Append non-empty, non-trivial blurbs to the running text
+                        if has_anomalies:
+                            validation_text_lines.append(response_text)
+
+                except Exception as batch_err:
+                    # Record the error as a span too so it's visible in MLflow
+                    try:
+                        with mlflow.start_span(
+                            name=f"deep_validation_batch_{batch_num}/{total_batches}_error"
+                        ) as err_span:
+                            err_span.set_attribute("batch_num", batch_num)
+                            err_span.set_attribute("error_type", type(batch_err).__name__)
+                            err_span.set_attribute("error_message", str(batch_err))
+                    except Exception:
+                        pass  # Never let tracing break the main pipeline
+                    validation_text_lines.append(
+                        f"[Batch {batch_num}/{total_batches} error: {type(batch_err).__name__}: {batch_err}]"
+                    )
+
+
+            # Combine all batch text blurbs into a single validation summary
+            combined_summary = "\n\n".join(validation_text_lines) if validation_text_lines else "No anomalies detected across all facilities."
+
+            # Return as a structured payload — validation_summary is plain text for the Main LLM
             return json.dumps({
                 "query": outer.get("query"),
-                "validation_results": all_batch_results,
+                "validation_summary": combined_summary,
                 "data_coverage_summary": outer.get("data_coverage_summary"),
                 "batches_processed": total_batches,
                 "total_facilities_analyzed": len(findings),
@@ -680,61 +698,21 @@ When the query is BOTH geospatial AND analytic:
   3. Call `medical_agent_tool` with `facility_ids=["id1", "id2", ...]` passing the extracted list.
   This ensures the anomaly/validation analysis runs ONLY on the exact facilities found within the radius.
 
-### Step 2.5 — Medical Reasoning Protocol (applies when query involves medical domain judgment):
+### Step 2.5 — Medical Agent Tool Branch Selection Guide (CRITICAL):
 
-If the query involves ANY of:
-  • over-claiming or implausible services (e.g., "clinic doing brain surgery")
-  • equipment-capability mismatches (e.g., "has MRI but no radiologist")
-  • subspecialty vs infrastructure plausibility (e.g., "neurosurgery at a small clinic")
-  • general capability plausibility (e.g., "can this facility actually do this?")
+The `medical_agent_tool` is powered by a backend SQL function that uses EXACT keyword matching (`RLIKE`) on your `query` argument to decide which analysis branch to run. **If you do not include specific keywords, your query may fail or hit the wrong branch!**
 
-Then follow this 3-step reasoning protocol:
-  1. Use genie_chat_tool to fetch the raw facility profile:
-     → Ask for: facility_name, facility_type, specialties, procedures, equipment, capacity, no_doctors, social_links
-     → Filter to the relevant facilities (e.g., clinics, pharmacies, dentists)
-  2. Use vector_search_tool strictly with the relevant `fact_types` based on what needs verification (e.g., `fact_types=["specialty", "procedure"]` if checking specialties, or `fact_types=["equipment"]` if only checking equipment). Do not blindly query all fact types if they are not needed.
-  3. Apply YOUR OWN medical expertise:
-     → Is this facility_type capable of these procedures given real-world medical standards?
-     → Does this equipment require specialist support that is not present?
-     → Is this subspecialty realistic given the facility's size and capacity?
-     → DO NOT use simple keyword matching — reason about plausibility holistically.
-  4. Report findings with: facility name, facility type, the suspicious claim, your
-     medical reasoning, and severity (high/medium/low).
+When calling `medical_agent_tool`, you MUST include one of the Exact Match Keywords in your `query` parameter depending on your goal:
 
-### Step 2.5 — Contradiction Detection Protocol (applies when query involves contradictions or inconsistencies):
+| Backend Branch | Use When User Asks About... | MUST include at least one exact keyword in `query` |
+|---|---|---|
+| **Branch 1: Unmet Needs** | Missing specialties or absent procedures in a region | `unmet`, `gap`, `need`, `service gap` |
+| **Branch 2: Capacity Outliers** | Unusually high/low bed or doctor numbers | `outlier`, `anomal`, `flag`, `capacity outlier`, `doctor anomaly` |
+| **Branch 3: NGO Overlap** | Multiple NGOs operating similarly in the same city | `ngo overlap`, `overlapping ngo`, `same ngo`, `same region` |
+| **Branch 4: Problem Type** | Facilities lacking all data for equipment or procedures | `problem type`, `root cause`, `gap type`, `classify gap`, `staff shortage` |
+| **Branch 5: Deep Validation** | Verifying claims/mismatches. *(Requires passing a `region` or `facility_name`!)* | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `infrastr` |
 
-If the user asks about **conflicting claims**, **contradictory information**, or **inconsistent data** for a facility:
-  1. Use `vector_search_tool` with the topic they mention (e.g., `query="ICU surgery contradictions"`) to semantically retrieve all related facts from `facility_facts`
-  2. **Group the results** by `facility_id` (available in each Document's metadata)
-  3. For any facility with **2 or more facts** on the same topic, compare the claims:
-     → Does Fact A say it has a capability that Fact B denies?
-     → Are there mutually exclusive claims (e.g., "no surgical unit" vs "performs cardiac surgery")?
-  4. Report findings with: facility name, the conflicting fact excerpts, your medical reasoning, and severity (high/medium/low)
-  5. If no conflicts are found, say so clearly.
-
-### Step 2.5 — Deep Validation & Feature Mismatch Protocol:
-
-If the user asks about facility claim validation, specialty-procedure-equipment
-consistency, infrastructure verification, OR procedure-to-equipment mismatches:
-  1. Extract the region name OR the specific facility name from the user's query.
-     (One of these is REQUIRED to prevent scanning the entire country blindly).
-  2. Call medical_agent_tool with:
-     → query: include "validate", "deep validation", or "feature mismatch" keyword
-     → region: the exact region name (e.g., "Northern") OR
-     → facility_name: the specific facility name (e.g., "Korle-Bu Teaching Hospital")
-     → city: the city name if mentioned (optional)
-     → Also pass any enum filters the user mentioned (operator_type, facility_type, etc.)
-  3. If the user does NOT mention a region OR a specific facility, you MUST ask them
-     to specify one before calling the tool. Do NOT call the tool empty.
-  4. The tool will internally batch-process all matching facilities
-     (8 at a time) and apply the full 5-check validation:
-       • SPECIALTY→PROCEDURE consistency
-       • PROCEDURE→EQUIPMENT consistency (catches qualitative 1:1 mismatches)
-       • SPECIALTY→EQUIPMENT support
-       • FACILITY_TYPE plausibility
-       • CAPACITY/doctor count realism
-  5. Present results grouped by severity (high → medium → low → consistent).
-  6. Always start with the data_coverage_summary.
+*Example:* If the user asks "Find hospitals making suspicious surgical claims", DO NOT just use `"suspicious surgical claims"`. You must inject a Branch 5 keyword: `"verify claim for suspicious surgical claims"`.
 
 ### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
 
@@ -753,19 +731,16 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
          - If a status is **`missing_data`**: The database simply lacks records for this category. Do NOT diagnose this as a medical gap. Group these as "Facilities with Unverifiable Missing Data" and explain why they cannot be fully evaluated.
          - If a status is **`true_zero`**: This is a confirmed absence of capability. Classify these true medical gaps as "equipment_gap" (has doctors/specialties but truly 0 equipment), "service_gap" (has equipment but truly 0 services/procedures), or "overclaim_gap" (claims many procedures but has 0 verifiable specialties).
   • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
-  • For `deep_validation` (Specialty/Procedure/Equipment Consistency + Feature Mismatch):
-      The tool has already performed batch LLM analysis internally. The results
-      contain pre-analyzed `validation_results` with `status`, `severity`, `mismatches`,
-      and `reasoning` for each facility. Present these grouped by severity:
-      1. **ALWAYS start** with `data_coverage_summary` — state how many facilities
-         were skipped due to insufficient data.
-      2. List **high** severity mismatches first (these are the most concerning).
-      3. Then **medium** and **low** severity.
-      4. For facilities with `status: consistent`, briefly note they passed.
-      5. Format as a clear markdown report with facility names and specific mismatches.
-      6. Check #2 of the internal validator (PROCEDURE→EQUIPMENT) catches qualitative
-         mismatches (e.g., Brain Surgery claimed with only a Thermometer) even when the
-         numeric count ratio appears normal. Trust the `mismatches` and `reasoning` fields.
+  • For `deep_validation` (Verifying claims and capabilities):
+      The tool has already analyzed all matching facilities in sequential batches of 15.
+      It returns a `validation_summary` — a plain-text block where each anomalous facility
+      has a compact blurb: [SEVERITY] [Facility Name] – [core mismatch]. Missing: [...]. [Reasoning] - [brief medical reasoning]
+      Consistent facilities are omitted from the summary entirely.
+      1. **ALWAYS start** with `data_coverage_summary` — state `total_facilities_analyzed`
+         vs. `data_coverage_summary.skipped_insufficient_data`.
+      2. Read `validation_summary`. Group facilities by severity: **high** → **medium** → **low**.
+      3. Apply the **Handling Large Results** rules from Step 4 to pick table vs. high-level summary.
+      4. If `validation_summary` says "No anomalies detected", state this clearly.
 
 ### Step 3 — Multi-tool orchestration:
 
@@ -773,31 +748,42 @@ After receiving each tool result, decide:
   • If more data is needed from another tool → call the next tool in sequence
   • If all necessary data is collected → synthesize a comprehensive markdown answer
   • If a tool returns an error or empty results → try the next appropriate tool as fallback
-  • Never repeat the same tool twice for the same purpose
+  • Never repeat the same tool twice for the same purpose. DO NOT repeatedly call a tool with slight variations of your search term (e.g. 'procedure count' then 'procedure count anomaly' then 'procedure count outlier'). If the first call returns valid JSON data (even if no anomalies are found), accept it and synthesize the final answer.
 
 ### Step 4 — Response format:
 
 • You MUST ALWAYS provide a final, human-readable response in Markdown format after your tool calls are complete.
 • NEVER respond with raw JSON, raw tool outputs, or unformatted text as your final answer.
-• DO NOT include internal `facility_id`s, UUIDs, or database primary keys in the final Markdown output. Keep it clean and user-friendly.
+• CRITICAL: NEVER include internal `facility_id` strings, UUIDs, or primary keys in the final Markdown output. Do a final check to ensure NO IDs are printed in text or tables. Keep it clean and user-friendly.
 • DO NOT mention internal tools (e.g., "vector-search", "Genie", "medical-agent") or technical query mechanisms in your response. Present your answers naturally to the user.
 • If you called multiple tools, synthesize their results together into a single cohesive summary.
-• IMPORTANT: If a tool (like geospatial search or medical anomaly flagging or the deep validation) returns a list of MORE THAN 25-30 facilities, DO NOT attempt to list them all in a table. It exceeds token limits and overwhelms the user. Instead, provide a high-level summary that strictly uses this format:
+
+### Handling Large Results:
+If a tool (like geospatial search, medical anomaly flagging, or deep validation) returns a large list of facilities, STRICTLY follow these rules based on the number of returned rows:
+
+1. **If > 30 facilities are returned**: 
+   DO NOT list them all in a table. It exceeds token limits. Instead, provide ONLY the high-level text summary (format below).
+   *Exception*: After analyzing all >30 rows, if you find that ONLY 20 or fewer rows contain TRULY valid anomaly data (i.e. they are genuine outliers worth noting, while the rest are normal/unremarkable), you MAY list those specific ≤20 invalid/anomalous facilities in a markdown table. Keep the details in the table minimal (e.g. skip full equipment lists). Always follow the table with the high-level summary.
+
+2. **If between 26 and 30 facilities are returned**:
+   List the first 20 facilities (or the 20 most relevant/anomalous) in a markdown table, and then add the high-level summary format below.
+
+3. **If 25 or fewer facilities are returned**:
+   Display ALL of them comprehensively in a structured markdown table. 
+
+### High-Level Summary Template (For > 25 rows):
+(Use paragraphs and bullet points. NEVER put this summary inside a markdown table):
   
   Answer: There are [Total Number] [Facility Type/Hospitals] [condition/radius/finding].
   
   Key findings:
-  [Name] is the closest [or most extreme anomaly], located [distance/value] away.
-  The farthest [or least extreme] within the [condition] is [Name], located [distance/value] away.
-  Other notable facilities in the area include [Name 1], [Name 2], and [Name 3].
+  - **Closest / Most Extreme**: [Name] is located [distance/value] away or has [finding].
+  - **Farthest / Least Extreme**: [Name] is located [distance/value] away or has [finding].
+  - **Other notable facilities**: [Name 1], [Name 2], [Name 3] and [Name 4] ([brief note on why]).
   
   Medical context: [1-2 sentences on the medical implications of this density/anomaly, e.g. Access to healthcare is crucial...]
-  
-  Data sources: The data was obtained using the [tool name] which returned a list of facilities [condition].
-  
-  Limitations: The data may not be comprehensive or up-to-date... [List relevant limitations like straight-line distance, missing data mentioned in data_coverage_summary, etc.]
 
-• If the tool returns 25 or fewer facilities, display them comprehensively in a structured markdown table.
+
 • Cite specific facility names and regions.
 • If no results are found, say so clearly and suggest trying a different approach.
 
@@ -971,15 +957,15 @@ class _ToolCallTracker:
                 inner = data["value"]
                 data = json.loads(inner) if isinstance(inner, str) else inner
 
-            # Combine standard findings with new batched validation_results
+            # Standard findings (non-deep-validation branches)
             findings = data.get("findings") or []
             if isinstance(findings, str):
                 findings = json.loads(findings)
 
-            val_results = data.get("validation_results") or []
-            if isinstance(val_results, str):
-                val_results = json.loads(val_results)
-                
+            # validation_summary is now plain text — no structured citations possible.
+            # We skip it here; the Main LLM reads it directly.
+            val_results = []
+
             all_items = findings + val_results
 
             for f in all_items:
@@ -1111,16 +1097,13 @@ class _ToolCallTracker:
                 for r in (regions or []):
                     if not isinstance(r, dict):
                         continue
-                    sources.append({
+                    source_dict = {
                         "source_type": "facility_records",
                         "region": r.get("state"),
-                        "country": r.get("country"),
-                        # region_centre lat/lon for map shading
-                        "latitude": r.get("region_centre_lat"),
-                        "longitude": r.get("region_centre_lon"),
                         "total_facilities": r.get("total_facilities"),
                         "matching_facilities": r.get("matching_facilities"),
-                    })
+                    }
+                    sources.append({k: v for k, v in source_dict.items() if v is not None})
             else:
                 # nearby or urban_rural
                 facilities_raw = outer.get("facilities", "[]")
@@ -1128,19 +1111,15 @@ class _ToolCallTracker:
                 for r in (facilities or []):
                     if not isinstance(r, dict):
                         continue
-                    sources.append({
+                    source_dict = {
                         "source_type": "facility_records",
                         "facility_id": r.get("facility_id"),
                         "facility_name": r.get("facility_name"),
                         "city": r.get("city"),
                         "state": r.get("state"),
-                        # lat/lon now present from updated SQL (nearby + urban_rural)
-                        "latitude": r.get("latitude"),
-                        "longitude": r.get("longitude"),
-                        "distance_km": r.get("distance_km"),
-                        "nearest_hub": r.get("nearest_hub"),
-                        "dist_to_nearest_hub_km": r.get("dist_to_nearest_hub_km"),
-                    })
+                        "distance_km": r.get("distance_km")
+                    }
+                    sources.append({k: v for k, v in source_dict.items() if v is not None})
         except Exception:
             pass
         return {

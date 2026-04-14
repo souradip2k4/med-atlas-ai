@@ -108,12 +108,13 @@ RETURN (
 
 
   -- ══════════════════════════════════════════════════════════════════════════
-  -- Branch 3. Anomaly Flagging (capacity/doctor outliers)
+  -- Branch 2. Anomaly Flagging (capacity/doctor outliers)
   -- OPTION A — Global Baseline / Local Alerts:
   --   cap_stats   → ENTIRE dataset (global norms, never filtered)
   --   data_context + outliers → scoped by all filters inline
   -- ══════════════════════════════════════════════════════════════════════════
   WHEN (SELECT query_lower FROM query_params) RLIKE 'outlier|anomal|flag|unusual|inconsisten|signal'
+   AND (SELECT query_lower FROM query_params) NOT RLIKE 'procedure|equipment|specialty|mismatch|valid|infrastr'
   THEN (
     WITH
     cap_stats AS (
@@ -262,7 +263,7 @@ RETURN (
   )
 
   -- ══════════════════════════════════════════════════════════════════════════
-  -- Branch 5. NGO Overlap (scoped inline)
+  -- Branch 3. NGO Overlap (scoped inline)
   -- ══════════════════════════════════════════════════════════════════════════
   WHEN (SELECT query_lower FROM query_params) RLIKE 'ngo overlap|overlapping ngo|same ngo|same region'
   THEN (
@@ -309,7 +310,7 @@ RETURN (
   )
 
   -- ══════════════════════════════════════════════════════════════════════════
-  -- Branch 6. Problem Type Classification (scoped inline)
+  -- Branch 4. Problem Type Classification (scoped inline)
   -- ══════════════════════════════════════════════════════════════════════════
   WHEN (SELECT query_lower FROM query_params) RLIKE 'problem type|root cause|gap type|classify gap|workforce|staffing|equipment gap|staff shortage'
   THEN (
@@ -423,7 +424,7 @@ RETURN (
   )
 
   -- ══════════════════════════════════════════════════════════════════════════
-  -- Branch 7. Deep Validation (Specialty↔Procedure↔Equipment + Feature Mismatch)
+  -- Branch 5. Deep Validation (Specialty↔Procedure↔Equipment + Feature Mismatch)
   -- Region OR facility_id OR facility_name is required (guard rail).
   -- All other scope filters applied inline.
   -- ══════════════════════════════════════════════════════════════════════════
