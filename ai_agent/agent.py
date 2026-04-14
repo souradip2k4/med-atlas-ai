@@ -759,33 +759,35 @@ After receiving each tool result, decide:
 • If you called multiple tools, synthesize their results together into a single cohesive summary.
 
 ### Handling Large Results:
-If a tool (like geospatial search, medical anomaly flagging, or deep validation) returns a large list of facilities, STRICTLY follow these rules based on the number of returned rows:
+If a tool (like geospatial search, medical anomaly flagging, or deep validation) returns a large list of facilities, STRICTLY follow these rules based on the number of **relevant/anomalous** facilities you find after your analysis:
 
-1. **If > 30 facilities are returned**: 
-   DO NOT list them all in a table. It exceeds token limits. Instead, provide ONLY the high-level text summary (format below).
-   *Exception*: After analyzing all >30 rows, if you find that ONLY 20 or fewer rows contain TRULY valid anomaly data (i.e. they are genuine outliers worth noting, while the rest are normal/unremarkable), you MAY list those specific ≤20 invalid/anomalous facilities in a markdown table. Keep the details in the table minimal (e.g. skip full equipment lists). Always follow the table with the high-level summary.
+1. **If there are ≤ 25 relevant/anomalous facilities**:
+   Display ALL of them in a comprehensive markdown table.
 
-2. **If between 26 and 30 facilities are returned**:
-   List the first 20 facilities (or the 20 most relevant/anomalous) in a markdown table, and then add the high-level summary format below.
+2. **If there are between 26 and 60 relevant/anomalous facilities**:
+   List the **top 60 most important/anomalous** facilities in a markdown table (prioritize by severity: high → medium → low, or by distance if geospatial). Then append the high-level summary below the table.
 
-3. **If 25 or fewer facilities are returned**:
-   Display ALL of them comprehensively in a structured markdown table. 
+3. **If there are > 60 relevant/anomalous facilities**:
+   List the **top 60 most important/anomalous** facilities in a markdown table (same priority rule). Then append the high-level summary below the table.
+   NEVER list all facilities. NEVER omit the table entirely.
 
-### High-Level Summary Template (For > 25 rows):
+**CRITICAL: You MUST include a markdown table with AT LEAST 20 facilities ONLY IF there are actually ≥ 20 truly relevant/anomalous facilities. If the tool returns 70 rows but only 12 have genuine anomalies/relevance, just list those 12 in the table. DO NOT pad the table with normal/consistent facilities just to hit 20. But if there ARE ≥ 20 valid hits, you MUST table them.**
+
+### High-Level Summary Template (always append after the table when > 25 rows):
 (Use paragraphs and bullet points. NEVER put this summary inside a markdown table):
   
   Answer: There are [Total Number] [Facility Type/Hospitals] [condition/radius/finding].
   
   Key findings:
-  - **Closest / Most Extreme**: [Name] is located [distance/value] away or has [finding].
-  - **Farthest / Least Extreme**: [Name] is located [distance/value] away or has [finding].
+  - **Most Extreme / Highest Severity**: [Name] – [finding].
   - **Other notable facilities**: [Name 1], [Name 2], [Name 3] and [Name 4] ([brief note on why]).
   
-  Medical context: [1-2 sentences on the medical implications of this density/anomaly, e.g. Access to healthcare is crucial...]
+  Medical context: [1-2 sentences on the medical implications of this density/anomaly]
 
 
 • Cite specific facility names and regions.
 • If no results are found, say so clearly and suggest trying a different approach.
+
 
 ### Step 5 — Missing Information:
 If the user asks a question that requires a region or city (such as finding nearby facilities, generating a specific regional anomaly report, or filtering by distance) but they DO NOT mention any region or city in their prompt, you MUST explicitly ask the user to provide the region or city before proceeding. Do NOT assume a default region. Use your interactive capability to clarify their request.

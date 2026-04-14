@@ -259,7 +259,7 @@ RETURN (
         )
       )
     )
-    FROM (SELECT * FROM outliers ORDER BY ABS(reported_value - typical_value) DESC LIMIT 50)
+    FROM (SELECT * FROM outliers ORDER BY ABS(reported_value - typical_value) DESC LIMIT 100)
   )
 
   -- ══════════════════════════════════════════════════════════════════════════
@@ -306,7 +306,7 @@ RETURN (
         )
       )
     )
-    FROM ngo_by_affiliation
+    FROM (SELECT * FROM ngo_by_affiliation ORDER BY n_facilities DESC LIMIT 100)
   )
 
   -- ══════════════════════════════════════════════════════════════════════════
@@ -420,7 +420,7 @@ RETURN (
         )
       )
     )
-    FROM flagged_facilities
+    FROM (SELECT * FROM flagged_facilities ORDER BY GREATEST(n_equip, n_specialties, n_procedures) DESC LIMIT 60)
   )
 
   -- ══════════════════════════════════════════════════════════════════════════
