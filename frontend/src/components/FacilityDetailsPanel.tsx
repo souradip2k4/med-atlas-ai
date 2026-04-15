@@ -39,7 +39,7 @@ function DetailSection({
     <section className="mt-7 border-t border-t-border-header pt-7 first:mt-0 first:border-t-0 first:pt-0">
       <div className="mb-4 flex items-center gap-3">
         <Icon className="size-5 text-ink-700" strokeWidth={1.9} />
-        <h3 className="text-[1.12rem] font-semibold text-[#182735]">{title}</h3>
+        <h3 className="text-[1.12rem] font-semibold text-ink-900">{title}</h3>
       </div>
       {children}
     </section>
@@ -50,7 +50,7 @@ function ArrowList({ items }: { items: string[] }) {
   return (
     <ul className="grid gap-3">
       {items.map((item) => (
-        <li key={item} className="flex items-start gap-3 text-[1.02rem] leading-8 text-[#23384f]">
+        <li key={item} className="flex items-start gap-3 text-[1.02rem] leading-8 text-ink-600">
           <ChevronRight className="mt-1 size-4 shrink-0 text-accent-600" strokeWidth={2.4} />
           <span>{formatLabel(item)}</span>
         </li>
@@ -69,15 +69,15 @@ function MetaRow({
   return (
     <div className="mt-3 flex items-start gap-3 first:mt-0">
       <Icon className="mt-0.5 size-[18px] shrink-0 text-accent-600" />
-      <div className="text-[1rem] leading-7 text-[#334c66]">{children}</div>
+      <div className="text-[1rem] leading-7 text-ink-600">{children}</div>
     </div>
   );
 }
 
 function DetailSkeleton() {
   return (
-    <div className="overflow-auto bg-white px-7 pb-8 pt-6">
-      <div className="rounded-[28px] border border-[rgba(191,214,244,0.95)] bg-[linear-gradient(180deg,#fbfdff_0%,#f7fbff_100%)] p-5 shadow-[inset_0_0_0_1px_rgba(236,242,252,0.92)]">
+    <div className="overflow-auto bg-surface-panel-strong px-7 pb-8 pt-6">
+      <div className="rounded-[28px] border border-border-soft bg-surface-card p-5 shadow-card">
         <div className="mb-5 flex gap-2.5">
           <div className="skeleton-block h-10 w-28 rounded-full" />
           <div className="skeleton-block h-10 w-24 rounded-full" />
@@ -156,11 +156,11 @@ export function FacilityDetailsPanel({
   ].filter((item): item is { label: string; value: string } => Boolean(item));
 
   return (
-    <aside className="absolute right-6 top-[118px] z-[28] grid max-h-[calc(100dvh-146px)] w-[min(540px,calc(100%-48px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[30px] border border-border-white-soft bg-white shadow-panel-strong backdrop-blur-[18px] animate-panel-in max-[920px]:bottom-3 max-[920px]:right-3 max-[920px]:top-auto max-[920px]:max-h-[58dvh] max-[920px]:w-[calc(100%-24px)]">
-      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-4 border-b border-b-border-header bg-white px-3 pb-4 pt-5 shadow-[0_10px_24px_rgba(20,39,71,0.06)]">
+    <aside className="absolute right-6 top-[118px] z-[28] grid max-h-[calc(100dvh-146px)] w-[min(540px,calc(100%-48px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[30px] border border-border-white-soft bg-surface-panel-strong shadow-panel-strong backdrop-blur-[18px] animate-panel-in max-[920px]:bottom-3 max-[920px]:right-3 max-[920px]:top-auto max-[920px]:max-h-[58dvh] max-[920px]:w-[calc(100%-24px)]">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-4 border-b border-b-border-header bg-surface-panel-strong px-3 pb-4 pt-5 shadow-overlay">
         <button
           type="button"
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-surface-filter text-ink-700"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-border-soft bg-surface-card-strong text-ink-700 shadow-inset-soft transition hover:border-border-highlight-soft hover:bg-surface-filter-strong hover:text-accent-700"
           onClick={onClose}
         >
           <X className="size-[19px]" />
@@ -170,7 +170,7 @@ export function FacilityDetailsPanel({
           <div className="text-detail-badge uppercase tracking-[0.18em] text-accent-600">
             Facility profile
           </div>
-          <h2 className="mt-1.5 break-words text-[1.06rem] leading-tight text-[#1b2a3a] font-semibold">
+          <h2 className="mt-1.5 break-words text-[1.06rem] font-semibold leading-tight text-ink-900">
             {displayName}
           </h2>
         </div>
@@ -179,15 +179,15 @@ export function FacilityDetailsPanel({
       {isLoading ? <DetailSkeleton /> : null}
 
       {isError ? (
-        <div className="grid gap-2 bg-white px-7 py-7 text-ink-600">
+        <div className="grid gap-2 bg-surface-panel-strong px-7 py-7 text-ink-600">
           <strong className="text-ink-900">Could not load this facility</strong>
           <p>{errorMessage}</p>
         </div>
       ) : null}
 
       {!isLoading && !isError && (profile || preview) ? (
-        <div className="overflow-auto bg-white px-7 pb-8 pt-6">
-          <div className="rounded-[28px] border border-[rgba(191,214,244,0.95)] bg-[linear-gradient(180deg,#fbfdff_0%,#f7fbff_100%)] p-5 shadow-[inset_0_0_0_1px_rgba(236,242,252,0.92)]">
+        <div className="overflow-auto bg-surface-panel-strong px-7 pb-8 pt-6">
+          <div className="rounded-[28px] border border-border-soft bg-surface-card p-5 shadow-card">
             <div className="mb-5 flex flex-wrap gap-3">
               <span className="inline-flex items-center rounded-full bg-surface-accent px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-[0.12em] text-accent-700">
                 {facilityType}
@@ -198,11 +198,11 @@ export function FacilityDetailsPanel({
                 </span>
               ) : null}
             </div>
-            <p className="text-[1rem] leading-8 text-[#52708f]">{description}</p>
+            <p className="text-[1rem] leading-8 text-ink-600">{description}</p>
           </div>
 
           <DetailSection icon={Globe} title="Overview">
-            <div className="grid gap-4 text-[1.02rem] leading-8 text-[#24384f]">
+            <div className="grid gap-4 text-[1.02rem] leading-8 text-ink-600">
               {(overviewParts.length > 0 ? overviewParts : [description]).map((item) => (
                 <p key={item}>{item}</p>
               ))}
@@ -274,14 +274,14 @@ export function FacilityDetailsPanel({
 
           {operationalRows.length > 0 ? (
             <DetailSection icon={Users} title="Operational Details">
-              <div className="grid gap-3 text-[1rem] text-[#23384f]">
+              <div className="grid gap-3 text-[1rem] text-ink-600">
                 {operationalRows.map((row) => (
                   <div
                     key={row.label}
                     className="grid grid-cols-[minmax(0,1fr)_auto] gap-6 border-b border-b-border-header pb-3 last:border-b-0 last:pb-0"
                   >
-                    <span className="text-[#5b7390]">{row.label}</span>
-                    <strong className="font-medium text-[#1b2a3a]">{row.value}</strong>
+                    <span className="text-ink-500">{row.label}</span>
+                    <strong className="font-medium text-ink-900">{row.value}</strong>
                   </div>
                 ))}
               </div>

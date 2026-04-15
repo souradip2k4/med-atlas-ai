@@ -1,6 +1,6 @@
-import { Suspense, lazy, startTransition } from 'react';
+import { Suspense, lazy, startTransition, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, MoonStar, SunMedium } from 'lucide-react';
 
 import { AdvancedFiltersModal } from './components/AdvancedFiltersModal';
 import { FacilityDetailsPanel } from './components/FacilityDetailsPanel';
@@ -37,10 +37,32 @@ function App() {
     setAdvancedFilter,
     clearSpecialties,
     resetAdvancedFilters,
+    themePreference,
     toggleAffiliation,
+    toggleTheme,
     toggleSpecialty,
     agentMarkers,
   } = useUIStore();
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+
+    const applyTheme = () => {
+      const nextTheme =
+        themePreference === 'system' ? (media.matches ? 'dark' : 'light') : themePreference;
+      setResolvedTheme(nextTheme);
+      document.documentElement.dataset.theme = nextTheme;
+      document.documentElement.style.colorScheme = nextTheme;
+    };
+
+    applyTheme();
+    media.addEventListener('change', applyTheme);
+
+    return () => {
+      media.removeEventListener('change', applyTheme);
+    };
+  }, [themePreference]);
 
   const metadataQuery = useQuery({
     queryKey: ['map-metadata'],
@@ -70,9 +92,9 @@ function App() {
 
   return (
     <div
-      className="relative flex h-dvh overflow-hidden bg-[radial-gradient(circle_at_72%_18%,rgba(140,199,255,0.35),transparent_28%),radial-gradient(circle_at_80%_78%,rgba(27,148,122,0.2),transparent_24%),linear-gradient(180deg,var(--color-surface-app)_0%,#f5f8fc_44%,#e7eef9_100%)] max-[920px]:block"
+      className="relative flex h-dvh overflow-hidden bg-[radial-gradient(circle_at_72%_18%,var(--color-app-glow-a),transparent_28%),radial-gradient(circle_at_80%_78%,var(--color-app-glow-b),transparent_24%),linear-gradient(180deg,var(--color-surface-app)_0%,var(--color-app-gradient-mid)_44%,var(--color-app-gradient-end)_100%)] max-[920px]:block"
     >
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_70%_12%,rgba(55,118,226,0.15),transparent_24%),radial-gradient(circle_at_88%_72%,rgba(8,145,178,0.14),transparent_20%)]" />
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_70%_12%,var(--color-overlay-glow-a),transparent_24%),radial-gradient(circle_at_88%_72%,var(--color-overlay-glow-b),transparent_20%)]" />
 
       <div
         className={`relative shrink-0 overflow-visible transition-[width,opacity,transform] duration-300 ease-out max-[920px]:contents ${
@@ -109,7 +131,7 @@ function App() {
         {sidebarOpen ? (
           <button
             type="button"
-            className="absolute left-full top-1/2 z-[32] hidden h-14 w-5 -translate-y-1/2 -ml-px items-center justify-center rounded-r-xl border border-white/90 bg-white/94 text-accent-600 shadow-overlay backdrop-blur-[12px] transition hover:bg-white min-[921px]:inline-flex"
+            className="absolute left-full top-1/2 z-[32] hidden h-14 w-5 -translate-y-1/2 -ml-px items-center justify-center rounded-r-xl border border-border-white-soft bg-surface-panel-strong text-accent-600 shadow-overlay backdrop-blur-[12px] transition hover:bg-surface-card-strong min-[921px]:inline-flex"
             onClick={toggleSidebar}
             aria-label="Collapse results sidebar"
           >
@@ -122,7 +144,7 @@ function App() {
         {!sidebarOpen ? (
           <button
             type="button"
-            className="absolute left-4 top-1/2 z-[35] inline-flex h-14 w-7 -translate-y-1/2 items-center justify-center rounded-r-xl border border-white/90 bg-white/94 text-accent-600 shadow-overlay backdrop-blur-[12px] transition hover:bg-white max-[920px]:hidden"
+            className="absolute left-4 top-1/2 z-[35] inline-flex h-14 w-7 -translate-y-1/2 items-center justify-center rounded-r-xl border border-border-white-soft bg-surface-panel-strong text-accent-600 shadow-overlay backdrop-blur-[12px] transition hover:bg-surface-card-strong max-[920px]:hidden"
             onClick={toggleSidebar}
             aria-label="Open results sidebar"
           >
@@ -133,8 +155,10 @@ function App() {
         <TopSearchBar
           metadata={metadataQuery.data}
           filters={filters}
+          resolvedTheme={resolvedTheme}
           activeDropdown={activeDropdown}
           onDropdownChange={setActiveDropdown}
+          onThemeToggle={() => toggleTheme(resolvedTheme)}
           onRegionSelect={(region) => {
             startTransition(() => {
               setRegion(region);
@@ -162,10 +186,12 @@ function App() {
           }
         >
           <MapCanvas
+            key={`map-${resolvedTheme}`}
             filters={filters}
             facilities={facilities}
             sidebarOpen={sidebarOpen}
             chatOpen={chatOpen}
+            theme={resolvedTheme}
             selectedFacilityPreview={selectedFacilityPreview}
             selectedFacility={facilityQuery.data}
             isFacilityLoading={facilityQuery.isLoading || facilityQuery.isFetching}
@@ -206,6 +232,19 @@ function App() {
         />
 
         <ChatFab />
+
+        <button
+          type="button"
+          className="absolute right-4 top-4 z-[34] inline-flex size-11 items-center justify-center rounded-full border border-border-white-soft bg-surface-panel-strong text-accent-600 shadow-overlay backdrop-blur-[14px] transition hover:bg-surface-card-strong min-[921px]:hidden"
+          onClick={() => toggleTheme(resolvedTheme)}
+          aria-label={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {resolvedTheme === 'dark' ? (
+            <SunMedium className="size-5" strokeWidth={2.1} />
+          ) : (
+            <MoonStar className="size-5" strokeWidth={2.1} />
+          )}
+        </button>
       </main>
 
       {chatOpen ? <ChatPanel /> : null}

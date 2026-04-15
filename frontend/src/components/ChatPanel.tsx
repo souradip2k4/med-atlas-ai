@@ -169,7 +169,7 @@ export function ChatPanel() {
   if (!chatOpen) return null;
 
   return (
-    <aside className="absolute inset-x-3 bottom-3 top-3 z-[40] flex min-w-0 flex-col overflow-hidden rounded-[24px] border border-border-white-strong bg-[linear-gradient(180deg,rgba(251,253,255,0.98)_0%,rgba(240,246,255,0.98)_42%,rgba(231,239,252,0.98)_100%)] shadow-panel-strong backdrop-blur-[16px] animate-chat-in min-[921px]:relative min-[921px]:inset-auto min-[921px]:z-20 min-[921px]:h-dvh min-[921px]:w-[55vw] min-[921px]:min-w-[560px] min-[921px]:shrink-0 min-[921px]:rounded-none min-[921px]:border-y-0 min-[921px]:border-r-0 min-[921px]:border-l min-[921px]:border-border-app min-[921px]:shadow-[-20px_0_48px_rgba(19,42,73,0.1)]">
+    <aside className="absolute inset-x-3 bottom-3 top-3 z-[40] flex min-w-0 flex-col overflow-hidden rounded-[24px] border border-border-white-strong bg-[var(--color-chat-shell)] shadow-panel-strong backdrop-blur-[16px] animate-chat-in min-[921px]:relative min-[921px]:inset-auto min-[921px]:z-20 min-[921px]:h-dvh min-[921px]:w-[55vw] min-[921px]:min-w-[560px] min-[921px]:shrink-0 min-[921px]:rounded-none min-[921px]:border-y-0 min-[921px]:border-r-0 min-[921px]:border-l min-[921px]:border-border-app min-[921px]:shadow-[-20px_0_48px_rgba(19,42,73,0.1)]">
       {viewingCitationsId && viewedCitations ? (
         <ChatCitationsView 
           citations={viewedCitations} 
@@ -177,9 +177,9 @@ export function ChatPanel() {
         />
       ) : (
         <>
-          <div className="flex shrink-0 items-center justify-between border-b border-border-app/80 bg-white/55 px-6 py-2.5 backdrop-blur-[10px]">
+          <div className="flex shrink-0 items-center justify-between border-b border-border-app/80 bg-[var(--color-chat-header)] px-6 py-2.5 backdrop-blur-[10px]">
             <div className="flex items-center gap-3">
-              <div className="relative flex size-11 items-center justify-center rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(79,141,247,0.2),rgba(79,141,247,0.06)_58%,transparent_72%)] text-accent-700">
+              <div className="relative flex size-11 items-center justify-center rounded-full bg-[var(--color-chat-icon-bg)] text-accent-700">
                 <span className="absolute inset-1 rounded-full border border-accent-100/90 animate-pulse" />
                 <BotMessageSquare className="relative z-[1] size-5" strokeWidth={2.2} />
               </div>
@@ -214,13 +214,13 @@ export function ChatPanel() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_50%_18%,rgba(79,141,247,0.08),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.18)_0%,rgba(255,255,255,0)_28%)] px-6 py-5 scrollbar-thin">
+          <div className="flex-1 overflow-y-auto bg-[var(--color-chat-body)] px-6 py-5 scrollbar-thin">
             {chatEntries.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center opacity-80">
                 <div className="relative mb-5 flex size-20 items-center justify-center">
-                  <span className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(79,141,247,0.24),rgba(79,141,247,0.06)_68%,transparent_72%)] animate-pulse" />
+                  <span className="absolute inset-0 rounded-full bg-[var(--color-chat-orb-glow)] animate-pulse" />
                   <span className="absolute inset-[10px] rounded-full border border-accent-100/90 animate-[spin_12s_linear_infinite]" />
-                  <span className="absolute inset-[18px] rounded-full bg-white/88 shadow-[0_18px_38px_rgba(79,141,247,0.16)]" />
+                  <span className="absolute inset-[18px] rounded-full bg-[var(--color-chat-orb-core)] shadow-[0_18px_38px_rgba(79,141,247,0.16)]" />
                   <Sparkles className="relative z-[1] size-7 text-accent-700" strokeWidth={2} />
                 </div>
                 <h3 className="mb-2 text-[1.55rem] font-semibold tracking-[-0.03em] text-ink-900">
@@ -236,7 +236,7 @@ export function ChatPanel() {
                       type="button"
                       disabled={isAnyLoading}
                       onClick={() => handleSubmit(prompt)}
-                      className="rounded-xl border border-border-app/80 bg-white/78 p-3 text-left text-[0.85rem] font-medium text-ink-700 shadow-[0_10px_24px_rgba(79,141,247,0.05)] transition hover:border-border-highlight hover:bg-white disabled:opacity-50"
+                      className="rounded-xl border border-border-app/80 bg-[var(--color-chat-prompt-bg)] p-3 text-left text-[0.85rem] font-medium text-ink-700 shadow-[0_10px_24px_rgba(79,141,247,0.05)] transition hover:border-border-highlight hover:bg-[var(--color-chat-prompt-hover)] disabled:opacity-50"
                     >
                       {prompt}
                     </button>
@@ -253,7 +253,7 @@ export function ChatPanel() {
 
                     <div className="flex flex-col items-start gap-1.5 max-w-[92%]">
                       {entry.isLoading && (
-                        <div className="inline-flex h-[42px] items-center gap-1.5 rounded-[20px] rounded-bl-[4px] border border-border-app/80 bg-white/86 px-4 py-3 shadow-[0_10px_24px_rgba(22,60,108,0.06)]">
+                        <div className="inline-flex h-[42px] items-center gap-1.5 rounded-[20px] rounded-bl-[4px] border border-border-app/80 bg-[var(--color-chat-assistant-surface)] px-4 py-3 shadow-[0_10px_24px_rgba(22,60,108,0.06)]">
                           <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_infinite]" />
                           <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_0.2s_infinite]" />
                           <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_0.4s_infinite]" />
@@ -276,7 +276,7 @@ export function ChatPanel() {
                       )}
 
                       {entry.assistantMessage && (
-                        <div className="prose-chat prose max-w-none rounded-[20px] rounded-bl-[4px] border border-border-panel/90 bg-white/88 px-4.5 py-4 text-ink-800 shadow-[0_12px_28px_rgba(25,47,77,0.06)]">
+                        <div className="prose-chat prose max-w-none rounded-[24px] rounded-bl-[6px] border border-[var(--color-chat-card-border)] bg-surface-panel px-5 py-5 text-ink-800 shadow-[var(--color-chat-card-shadow)]">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {entry.assistantMessage}
                           </ReactMarkdown>
@@ -287,7 +287,7 @@ export function ChatPanel() {
                         <button
                           type="button"
                           onClick={() => setViewingCitationsId(entry.id)}
-                          className="ml-1 mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-filter px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:bg-surface-accent-soft hover:text-accent-700"
+                          className="ml-1 mt-1 inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M3 19h6"/><path d="M10 12h.01"/></svg>
                           View {entry.citations.summary.total_sources} source{entry.citations.summary.total_sources > 1 && 's'}
@@ -301,8 +301,8 @@ export function ChatPanel() {
             )}
           </div>
 
-          <div className="shrink-0 border-t border-border-app/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.52),rgba(236,243,253,0.92))] p-5 backdrop-blur-[12px]">
-            <div className="relative flex items-end">
+          <div className="shrink-0 border-t border-border-app/80 bg-[var(--color-chat-footer)] p-5 backdrop-blur-[12px]">
+            <div className="relative flex items-end rounded-[20px] border border-[var(--color-chat-composer-border)] bg-[var(--color-chat-composer-shell)] shadow-[var(--color-chat-composer-shadow)]">
               <input
                 ref={inputRef}
                 value={inputVal}
@@ -310,13 +310,13 @@ export function ChatPanel() {
                 onKeyDown={handleKeyDown}
                 placeholder="Ask about Ghana's medical facilities..."
                 disabled={isAnyLoading}
-                className="w-full rounded-lg border border-[rgba(36,82,151,0.28)] bg-white/92 py-3 pl-4 pr-12 text-[0.95rem] text-ink-900 shadow-[inset_0_0_0_1px_rgba(219,227,239,0.8),0_8px_22px_rgba(40,79,141,0.08)] placeholder:text-ink-400 focus:border-accent-400 focus:ring focus:ring-accent-100 disabled:bg-surface-empty disabled:opacity-70 transition-shadow"
+                className="w-full rounded-[15px] border border-[var(--color-chat-input-border)] bg-[var(--color-chat-input-bg)] py-3.5 pl-4 pr-13 text-[0.95rem] text-ink-900 shadow-[inset_0_0_0_1px_var(--color-chat-input-inset)] placeholder:text-ink-400 focus:border-accent-400 focus:ring focus:ring-accent-100 disabled:bg-surface-empty disabled:opacity-70 transition-shadow"
               />
               <button
                 type="button"
                 disabled={isAnyLoading ? false : !inputVal.trim()}
                 onClick={isAnyLoading ? handleStop : () => handleSubmit(inputVal)}
-                className="absolute bottom-1 right-1 flex size-[38px] items-center justify-center rounded-full bg-accent-600 text-white transition hover:bg-accent-700 disabled:bg-ink-300 disabled:opacity-50"
+                className="absolute bottom-1.5 right-3 flex size-10 items-center justify-center rounded-full bg-accent-600 text-white shadow-[0_10px_22px_rgba(47,111,229,0.28)] transition hover:bg-accent-700 disabled:bg-ink-400 disabled:opacity-90"
                 aria-label={isAnyLoading ? 'Stop response' : 'Send message'}
               >
                 {isAnyLoading ? (

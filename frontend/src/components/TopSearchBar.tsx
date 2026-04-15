@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { MapPinned, MapPin, Stethoscope, X } from 'lucide-react';
+import { MapPinned, MapPin, MoonStar, Stethoscope, SunMedium, X } from 'lucide-react';
+import type { ThemeMode } from '../lib/types';
 
 import { formatLabel } from '../lib/format';
 import type { DropdownKey, MapMetadata, SearchFilters } from '../lib/types';
@@ -8,8 +9,10 @@ import type { DropdownKey, MapMetadata, SearchFilters } from '../lib/types';
 interface TopSearchBarProps {
   metadata: MapMetadata | undefined;
   filters: SearchFilters;
+  resolvedTheme: ThemeMode;
   activeDropdown: DropdownKey;
   onDropdownChange: (dropdown: DropdownKey) => void;
+  onThemeToggle: () => void;
   onRegionSelect: (region: string) => void;
   onCitySelect: (city: string) => void;
   onToggleSpecialty: (specialty: string) => void;
@@ -63,7 +66,7 @@ function FieldButton({
       </span>
       {onClear && value ? (
         <span
-          className="inline-flex size-6.5 items-center justify-center rounded-full bg-white/95 text-accent-600 shadow-chip"
+          className="inline-flex size-6.5 items-center justify-center rounded-full border border-border-white-soft bg-surface-card-strong text-accent-600 shadow-chip"
           onClick={(event) => {
             event.stopPropagation();
             onClear();
@@ -87,8 +90,10 @@ function FieldButton({
 export function TopSearchBar({
   metadata,
   filters,
+  resolvedTheme,
   activeDropdown,
   onDropdownChange,
+  onThemeToggle,
   onRegionSelect,
   onCitySelect,
   onToggleSpecialty,
@@ -169,7 +174,7 @@ export function TopSearchBar({
       ref={shellRef}
     >
       <div className="relative mx-auto max-w-[700px]" ref={frameRef}>
-        <div className="grid animate-chrome-in grid-cols-3 gap-2 rounded-[30px] border border-white/88 bg-white/94 shadow-search backdrop-blur-[18px]">
+        <div className="grid animate-chrome-in grid-cols-3 gap-2 rounded-[30px] border border-border-white-soft bg-surface-panel-strong shadow-search backdrop-blur-[18px]">
           <div ref={regionRef}>
             <FieldButton
           
@@ -208,9 +213,22 @@ export function TopSearchBar({
           </div>
         </div>
 
+        <button
+          type="button"
+          className="absolute right-[-58px] top-1/2 hidden size-11 -translate-y-1/2 items-center justify-center rounded-full border border-border-white-soft bg-surface-panel-strong text-accent-600 shadow-overlay backdrop-blur-[14px] transition hover:bg-surface-card-strong min-[921px]:inline-flex"
+          onClick={onThemeToggle}
+          aria-label={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {resolvedTheme === 'dark' ? (
+            <SunMedium className="size-5" strokeWidth={2.1} />
+          ) : (
+            <MoonStar className="size-5" strokeWidth={2.1} />
+          )}
+        </button>
+
       {activeDropdown === 'region' ? (
         <div
-          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
+          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-border-white-soft bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
           style={dropdownStyle}
         >
           <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
@@ -225,7 +243,7 @@ export function TopSearchBar({
                 className={`flex items-center gap-3 rounded-chip border px-4 py-3.5 text-left transition duration-150 ${
                   filters.region === region
                     ? 'border-border-highlight bg-surface-accent-strong'
-                    : 'border-border-option bg-white hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
+                    : 'border-border-option bg-surface-card hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
                 }`}
                 onClick={() => {
                   onRegionSelect(region);
@@ -242,7 +260,7 @@ export function TopSearchBar({
 
       {activeDropdown === 'city' ? (
         <div
-          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
+          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-border-white-soft bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
           style={dropdownStyle}
         >
           <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
@@ -258,7 +276,7 @@ export function TopSearchBar({
                   className={`flex items-center gap-3 rounded-chip border px-4 py-3.5 text-left transition duration-150 ${
                     filters.city === city
                       ? 'border-border-highlight bg-surface-accent-strong'
-                      : 'border-border-option bg-white hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
+                      : 'border-border-option bg-surface-card hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
                   }`}
                   onClick={() => {
                     onCitySelect(city);
@@ -280,7 +298,7 @@ export function TopSearchBar({
 
       {activeDropdown === 'specialty' ? (
         <div
-          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-white/95 bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
+          className="absolute top-[calc(100%+12px)] animate-panel-in rounded-panel border border-border-white-soft bg-surface-panel-strong p-4.5 shadow-panel backdrop-blur-[16px]"
           style={dropdownStyle}
         >
           <div className="mb-3.5 flex items-center justify-between text-panel-header text-ink-500">
@@ -297,7 +315,7 @@ export function TopSearchBar({
                   className={`flex items-center gap-3 rounded-chip border px-4 py-3.5 text-left transition duration-150 ${
                     selected
                       ? 'border-border-highlight bg-surface-accent-strong'
-                      : 'border-border-option bg-white hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
+                      : 'border-border-option bg-surface-card hover:-translate-y-px hover:border-border-highlight hover:bg-surface-accent-strong'
                   }`}
                   onClick={() => onToggleSpecialty(specialty)}
                 >

@@ -16,7 +16,7 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
 
   return (
     <div className="flex h-full flex-col animate-chat-slide overflow-hidden">
-      <div className="flex items-center gap-3 border-b border-border-app px-5 py-4 bg-surface-panel-strong/98">
+      <div className="flex items-center gap-3 border-b border-border-app bg-[var(--color-chat-header)] px-5 py-4 backdrop-blur-[10px]">
         <button
           type="button"
           onClick={onClose}
@@ -33,7 +33,7 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-4 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto bg-[var(--color-chat-body)] px-5 py-4 scrollbar-thin">
         {citations.steps.map((step, idx) => (
           <div key={idx} className="mb-6 last:mb-2">
             <div className="mb-3">
@@ -41,14 +41,17 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
                 <Network className="size-3" strokeWidth={2.5} />
                 {step.tool_name}
               </div>
-              <p className="text-ui-sm text-ink-900 bg-surface-empty p-2.5 rounded-lg border border-border-panel font-medium">
+              <p className="rounded-lg border border-border-panel bg-surface-empty p-2.5 text-ui-sm font-medium text-ink-900">
                 "{step.query_used}"
               </p>
             </div>
 
-            <div className="grid gap-2 outline outline-1 outline-border-panel rounded-card p-1.5 bg-white">
+            <div className="grid gap-2 rounded-[26px] border border-[var(--color-chat-citation-rail-border)] bg-[var(--color-chat-citation-rail)] p-2 shadow-[var(--color-chat-citation-rail-shadow)]">
               {step.sources?.map((source, sIdx) => (
-                <div key={sIdx} className="rounded-xl bg-surface-panel-soft p-3 hover:bg-surface-accent-soft transition-colors group">
+                <div
+                  key={sIdx}
+                  className="group rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-surface-panel-soft p-3.5 shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-[var(--color-chat-citation-card-hover)]"
+                >
                   <div className="flex items-start justify-between gap-2 mb-1.5">
                     {source.facility_name ? (
                       <button
@@ -65,7 +68,7 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
                       </strong>
                     )}
                     {source.fact_type && (
-                      <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[0.65rem] font-bold uppercase tracking-wider text-ink-500 shadow-sm outline outline-1 outline-border-app">
+                      <span className="shrink-0 rounded bg-[var(--color-chat-citation-badge-bg)] px-1.5 py-0.5 text-[0.65rem] font-bold uppercase tracking-wider text-ink-500 shadow-sm outline outline-1 outline-border-app">
                         {source.fact_type}
                       </span>
                     )}
@@ -86,7 +89,7 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
         ))}
       </div>
 
-      <div className="border-t border-border-app bg-surface-panel-soft px-5 py-3 text-[0.75rem] text-ink-500">
+      <div className="border-t border-border-app bg-[var(--color-chat-footer)] px-5 py-3 text-[0.75rem] text-ink-500">
         {citations.summary?.tools_used?.length > 0 && (
           <div className="mb-1.5 flex flex-wrap gap-x-3 gap-y-1">
             <strong>Tools used:</strong>

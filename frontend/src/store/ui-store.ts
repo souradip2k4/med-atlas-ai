@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import type { BoundingBox, ChatEntry, DropdownKey, SearchFilters } from '../lib/types';
+import type {
+  BoundingBox,
+  ChatEntry,
+  DropdownKey,
+  SearchFilters,
+  ThemePreference,
+} from '../lib/types';
 
 const DEFAULT_FILTERS: SearchFilters = {
   region: '',
@@ -24,6 +30,7 @@ interface UIState {
   chatOpen: boolean;
   chatEntries: ChatEntry[];
   viewingCitationsId: string | null;
+  themePreference: ThemePreference;
   agentMarkers: Array<{
     facility_id: string;
     facility_name: string;
@@ -32,6 +39,8 @@ interface UIState {
   }>;
   setChatOpen: (open: boolean) => void;
   toggleChat: () => void;
+  setThemePreference: (theme: ThemePreference) => void;
+  toggleTheme: (resolvedTheme: 'light' | 'dark') => void;
   addChatEntry: (entry: ChatEntry) => void;
   updateChatEntry: (id: string, updates: Partial<ChatEntry>) => void;
   setViewingCitationsId: (id: string | null) => void;
@@ -70,9 +79,15 @@ export const useUIStore = create<UIState>()(
       chatOpen: true,
       chatEntries: [],
       viewingCitationsId: null,
+      themePreference: 'system',
       agentMarkers: [],
       setChatOpen: (open) => set({ chatOpen: open }),
       toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
+      setThemePreference: (themePreference) => set({ themePreference }),
+      toggleTheme: (resolvedTheme) =>
+        set({
+          themePreference: resolvedTheme === 'dark' ? 'light' : 'dark',
+        }),
       addChatEntry: (entry) =>
         set((state) => ({
           chatEntries: [...state.chatEntries, entry],
@@ -177,6 +192,7 @@ export const useUIStore = create<UIState>()(
       name: 'med-atlas-map-ui',
       partialize: (state) => ({
         filters: state.filters,
+        themePreference: state.themePreference,
       }),
     },
   ),

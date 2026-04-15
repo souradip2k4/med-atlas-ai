@@ -121,7 +121,7 @@ export function ResultsSidebar({
 
   return (
     <aside
-      className={`relative z-10 flex h-dvh flex-col overflow-y-auto border-r border-r-border-app bg-white/90 px-3.5 pb-6 pt-6 shadow-sidebar backdrop-blur-[14px] transition-[transform,opacity] duration-300 ease-out max-[920px]:absolute max-[920px]:inset-x-3 max-[920px]:bottom-3 max-[920px]:h-auto max-[920px]:min-h-0 max-[920px]:max-h-[44dvh] max-[920px]:rounded-panel max-[920px]:border max-[920px]:border-border-white-strong max-[920px]:px-2 max-[920px]:shadow-sidebar-mobile ${
+      className={`relative z-10 flex h-dvh flex-col overflow-y-auto border-r border-r-border-app bg-surface-panel-strong/92 px-3.5 pb-6 pt-6 shadow-sidebar backdrop-blur-[14px] transition-[transform,opacity] duration-300 ease-out max-[920px]:absolute max-[920px]:inset-x-3 max-[920px]:bottom-3 max-[920px]:h-auto max-[920px]:min-h-0 max-[920px]:max-h-[44dvh] max-[920px]:rounded-panel max-[920px]:border max-[920px]:border-border-white-strong max-[920px]:px-2 max-[920px]:shadow-sidebar-mobile ${
         sidebarOpen ? 'translate-x-0 opacity-100' : '-translate-x-6 opacity-0'
       }`}
     >
@@ -156,13 +156,13 @@ export function ResultsSidebar({
           type="button"
           className={
             advancedOpen
-              ? 'flex w-full items-center justify-between rounded-[26px] border border-[rgba(79,141,247,0.24)] bg-[linear-gradient(180deg,rgba(239,246,255,0.98),rgba(232,241,255,0.96))] px-5 py-4 text-ink-900 shadow-[0_14px_28px_rgba(53,103,190,0.08)]'
-              : 'flex w-full items-center justify-between rounded-[26px] border border-[rgba(232,238,247,0.96)] bg-[linear-gradient(180deg,rgba(244,247,252,0.98),rgba(239,244,250,0.98))] px-5 py-4 text-ink-900 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.95)]'
+              ? 'flex w-full items-center justify-between rounded-[26px] border border-border-highlight bg-surface-accent-strong px-5 py-4 text-ink-900 shadow-card-active'
+              : 'flex w-full items-center justify-between rounded-[26px] border border-border-soft bg-surface-panel px-5 py-4 text-ink-900 shadow-inset-soft'
           }
           onClick={onAdvancedToggle}
         >
           <span className="inline-flex items-center gap-2.5 font-semibold">
-            <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-white text-accent-600 shadow-[0_8px_16px_rgba(69,119,191,0.08)]">
+            <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-surface-card-strong text-accent-600 shadow-chip">
               <SlidersHorizontal className="size-[18px]" />
             </span>
             <span>

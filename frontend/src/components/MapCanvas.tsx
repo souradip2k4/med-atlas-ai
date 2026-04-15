@@ -5,13 +5,20 @@ import mapboxgl from 'mapbox-gl';
 import { geocodePlace, getHighlightFeature } from '../lib/api';
 import { GHANA_BOUNDS, GHANA_VIEW, formatLabel } from '../lib/format';
 import { MAPBOX_TOKEN } from '../lib/env';
-import type { BoundingBox, FacilityProfile, FacilitySummary, SearchFilters } from '../lib/types';
+import type {
+  BoundingBox,
+  FacilityProfile,
+  FacilitySummary,
+  SearchFilters,
+  ThemeMode,
+} from '../lib/types';
 
 interface MapCanvasProps {
   filters: SearchFilters;
   facilities: FacilitySummary[];
   sidebarOpen: boolean;
   chatOpen: boolean;
+  theme: ThemeMode;
   selectedFacilityPreview: FacilitySummary | null;
   selectedFacility: FacilityProfile | null | undefined;
   isFacilityLoading: boolean;
@@ -107,6 +114,7 @@ export function MapCanvas({
   facilities,
   sidebarOpen,
   chatOpen,
+  theme,
   selectedFacilityPreview,
   selectedFacility,
   isFacilityLoading,
@@ -139,7 +147,10 @@ export function MapCanvas({
 
     const map = new mapboxgl.Map({
       container: mapNodeRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style:
+        theme === 'dark'
+          ? 'mapbox://styles/mapbox/dark-v11'
+          : 'mapbox://styles/mapbox/streets-v12',
       center: GHANA_VIEW.center,
       zoom: GHANA_VIEW.zoom,
       maxBounds: GHANA_BOUNDS,
@@ -227,7 +238,7 @@ export function MapCanvas({
       map.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [theme]);
 
   useEffect(() => {
     const map = mapRef.current;

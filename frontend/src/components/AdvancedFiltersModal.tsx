@@ -41,8 +41,8 @@ function FilterChoice({
       type="button"
       className={
         selected
-          ? 'flex min-h-24 items-center justify-between rounded-[22px] border border-[rgba(79,141,247,0.28)] bg-[linear-gradient(180deg,rgba(239,246,255,0.98),rgba(232,241,255,0.96))] px-4 py-3 text-left shadow-[0_12px_24px_rgba(53,103,190,0.08)]'
-          : 'flex min-h-24 items-center justify-between rounded-[22px] border border-border-soft bg-white px-4 py-3 text-left shadow-[0_10px_22px_rgba(24,56,103,0.04)] transition hover:border-[rgba(79,141,247,0.2)] hover:bg-[rgba(248,251,255,0.98)]'
+          ? 'flex min-h-24 items-center justify-between rounded-[22px] border border-border-highlight bg-surface-accent-strong px-4 py-3 text-left shadow-card-active'
+          : 'flex min-h-24 items-center justify-between rounded-[22px] border border-border-soft bg-surface-card px-4 py-3 text-left shadow-card transition hover:border-border-highlight-soft hover:bg-surface-card-strong'
       }
       onClick={onClick}
     >
@@ -65,7 +65,7 @@ function FilterChoice({
         className={
           selected
             ? 'ml-3 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-600 text-white'
-            : 'ml-3 inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border-field bg-white text-transparent'
+            : 'ml-3 inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border-field bg-surface-card-strong text-transparent'
         }
       >
         <Check className="size-3.5" strokeWidth={2.7} />
@@ -88,8 +88,8 @@ function FilterTag({
       type="button"
       className={
         selected
-          ? 'rounded-full border border-[rgba(79,141,247,0.22)] bg-surface-accent px-4 py-2.5 text-[0.94rem] font-medium text-accent-700 shadow-[0_10px_18px_rgba(53,103,190,0.08)]'
-          : 'rounded-full border border-border-field bg-white px-4 py-2.5 text-[0.94rem] font-medium text-ink-700 transition hover:border-[rgba(79,141,247,0.18)] hover:bg-[rgba(247,250,255,0.96)]'
+          ? 'rounded-full border border-border-highlight bg-surface-accent px-4 py-2.5 text-[0.94rem] font-medium text-accent-700 shadow-chip'
+          : 'rounded-full border border-border-field bg-surface-card-strong px-4 py-2.5 text-[0.94rem] font-medium text-ink-700 transition hover:border-border-highlight-soft hover:bg-surface-card'
       }
       onClick={onClick}
     >
@@ -132,18 +132,18 @@ export function AdvancedFiltersModal({
 
   return (
     <div
-      className="absolute inset-0 z-[38] flex items-center justify-center bg-[rgba(16,28,48,0.2)] px-4 py-6 backdrop-blur-[6px]"
+      className="absolute inset-0 z-[38] flex items-center justify-center bg-[var(--color-modal-backdrop)] px-4 py-6 backdrop-blur-[6px]"
       onClick={onClose}
     >
       <div
-        className="grid max-h-[min(82dvh,860px)] w-[min(780px,calc(100%-20px))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[30px] border border-border-white-soft bg-white shadow-[0_36px_72px_rgba(19,44,88,0.22)] max-[720px]:w-[calc(100%-10px)]"
+        className="grid max-h-[min(82dvh,860px)] w-[min(780px,calc(100%-20px))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[30px] border border-border-white-soft bg-surface-panel-strong shadow-[0_36px_72px_rgba(19,44,88,0.22)] max-[720px]:w-[calc(100%-10px)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-5 border-b border-b-border-header px-6 py-5">
           <div className="flex items-start gap-4">
             <button
               type="button"
-              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-border-field bg-white text-ink-700"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-border-field bg-surface-card-strong text-ink-700"
               onClick={onClose}
             >
               <X className="size-5" />
@@ -262,7 +262,7 @@ export function AdvancedFiltersModal({
         <div className="flex items-center justify-end gap-3 border-t border-t-border-header px-6 py-4">
           <button
             type="button"
-            className="rounded-full border border-border-field bg-white px-4 py-2.5 text-[0.96rem] font-medium text-ink-600 transition hover:border-[rgba(79,141,247,0.18)] hover:text-accent-700"
+            className="rounded-full border border-border-field bg-surface-card-strong px-4 py-2.5 text-[0.96rem] font-medium text-ink-600 transition hover:border-border-highlight-soft hover:text-accent-700"
             onClick={onResetAdvancedFilters}
             disabled={advancedFilterCount === 0}
           >

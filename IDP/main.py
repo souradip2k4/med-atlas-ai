@@ -9,9 +9,6 @@ Stages
 3. Checkpoint → Identify which CSV rows have already been processed
 4. Extraction Chain → Process new rows through the 4-step LLM pipeline
 5. Merge & Shape → Consolidate LLM outputs into `facility_records`
-6. Fact Generation → Paraphrase and extract scalar facts into `facility_facts`
-7. Regional Insights → Aggregate macro analytics, save to `regional_insights`, 
-   and inject location-aware summary sentences into `facility_facts` for RAG.
 """
 
 import logging
@@ -27,12 +24,10 @@ from pyspark.sql import functions as F
 from storage.database import DatabricksDatabase
 from storage.models import (
     FACILITY_RECORDS_SCHEMA,
-    FACILITY_FACTS_SCHEMA,
 )
 from pipeline.loader import load_csv_data
 from pipeline.extractor import LLMExtractor
 from pipeline.merger import merge_extraction_results
-from pipeline.fact_generator import generate_facts
 
 load_dotenv()
 
@@ -52,9 +47,7 @@ def main() -> None:
     logger.info("═══ Stage 1: Initialising database ═══")
     db = DatabricksDatabase()
 
-    # Ensure target tables exist
     db.create_table_if_not_exists("facility_records", FACILITY_RECORDS_SCHEMA)
-    db.create_table_if_not_exists("facility_facts", FACILITY_FACTS_SCHEMA)
 
     # ── 2. Load CSV ──────────────────────────────────────────────────
     logger.info("═══ Stage 2: Loading CSV ═══")
@@ -120,7 +113,6 @@ def main() -> None:
 
     BATCH_SIZE = 50
     facility_records_batch: List[Dict[str, Any]] = []
-    facts_batch: List[Dict[str, Any]] = []
     done = 0
 
     if total_rows > 0:
@@ -131,21 +123,20 @@ def main() -> None:
         
         def _process_row(
             args: Tuple[int, Dict[str, Any]]
-        ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-            """Process a single row: extract → merge → generate facts."""
+        ) -> Optional[Dict[str, Any]]:
+            """Process a single row: extract → merge."""
             idx, row = args
             row_id = row.get("unique_id") or row.get("pk_unique_id") or str(idx)
             try:
                 extraction = extractor.process_row(row)
                 record = merge_extraction_results(extraction, row)
-                facts = generate_facts(record)
-                return record, facts
+                return record
             except Exception as exc:
                 logger.error(
                     "Row %d (id=%s, name=%s) failed: %s — skipping",
                     idx + 1, row_id, row.get("name", "?"), exc,
                 )
-                return None, []
+                return None
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
@@ -153,11 +144,10 @@ def main() -> None:
                 for i, r in enumerate(rows)
             }
             for future in as_completed(futures):
-                record, facts = future.result()
+                record = future.result()
                 done += 1
                 if record:
                     facility_records_batch.append(record)
-                    facts_batch.extend(facts)
                 
                 if done % 10 == 0 or done == total_rows:
                     logger.info("Progress: %d/%d pending rows done", done, total_rows)
@@ -169,10 +159,6 @@ def main() -> None:
                         db.append_delta(records_df, "facility_records")
                         facility_records_batch.clear()
                         new_rows_written = True
-                    if facts_batch:
-                        facts_df = db.spark.createDataFrame(facts_batch, FACILITY_FACTS_SCHEMA)
-                        db.append_delta(facts_df, "facility_facts")
-                        facts_batch.clear()
 
         logger.info("Extraction and batch-saving complete.")
 
@@ -187,7 +173,6 @@ def _print_summary(db) -> None:
     """Print row counts for all output tables."""
     tables = [
         "facility_records",
-        "facility_facts",
     ]
     logger.info("─── Final table row counts ───")
     for t in tables:

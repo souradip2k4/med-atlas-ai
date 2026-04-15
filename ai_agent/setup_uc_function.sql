@@ -420,7 +420,7 @@ RETURN (
         )
       )
     )
-    FROM (SELECT * FROM flagged_facilities ORDER BY GREATEST(n_equip, n_specialties, n_procedures) DESC LIMIT 60)
+    FROM (SELECT * FROM flagged_facilities ORDER BY GREATEST(n_equip, n_specialties, n_procedures) DESC LIMIT 100)
   )
 
   -- ══════════════════════════════════════════════════════════════════════════

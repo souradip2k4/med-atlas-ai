@@ -19,6 +19,13 @@
   --color-tone-lilac: #9a74ef;
   --color-tone-ink-soft: #6d88ad;
   --color-surface-app: #edf3fb;
+  --color-app-gradient-mid: #f5f8fc;
+  --color-app-gradient-end: #e7eef9;
+  --color-app-glow-a: rgba(140, 199, 255, 0.35);
+  --color-app-glow-b: rgba(27, 148, 122, 0.2);
+  --color-overlay-glow-a: rgba(55, 118, 226, 0.15);
+  --color-overlay-glow-b: rgba(8, 145, 178, 0.14);
+  --color-modal-backdrop: rgba(16, 28, 48, 0.2);
   --color-surface-card: rgba(255, 255, 255, 0.96);
   --color-surface-card-strong: rgba(252, 254, 255, 0.98);
   --color-surface-panel: rgba(255, 255, 255, 0.92);
@@ -74,9 +81,130 @@
   --shadow-chip: 0 8px 18px rgba(69, 119, 191, 0.12);
   --shadow-avatar: 0 12px 20px rgba(18, 35, 68, 0.12);
 
+  --color-chat-shell: linear-gradient(180deg, rgba(251, 253, 255, 0.98) 0%, rgba(240, 246, 255, 0.98) 42%, rgba(231, 239, 252, 0.98) 100%);
+  --color-chat-header: rgba(255, 255, 255, 0.55);
+  --color-chat-body: radial-gradient(circle at 50% 18%, rgba(79, 141, 247, 0.08), transparent 28%), linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0) 28%);
+  --color-chat-footer: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(236, 243, 253, 0.92));
+  --color-chat-icon-bg: radial-gradient(circle at 30% 30%, rgba(79, 141, 247, 0.2), rgba(79, 141, 247, 0.06) 58%, transparent 72%);
+  --color-chat-orb-glow: radial-gradient(circle at 30% 30%, rgba(79, 141, 247, 0.24), rgba(79, 141, 247, 0.06) 68%, transparent 72%);
+  --color-chat-orb-core: rgba(255, 255, 255, 0.88);
+  --color-chat-prompt-bg: rgba(255, 255, 255, 0.78);
+  --color-chat-prompt-hover: rgba(255, 255, 255, 1);
+  --color-chat-assistant-surface: rgba(255, 255, 255, 0.88);
+  --color-chat-citation-rail: rgba(255, 255, 255, 0.68);
+  --color-chat-citation-card: rgba(241, 247, 255, 0.94);
+  --color-chat-citation-card-hover: rgba(235, 243, 255, 0.98);
+  --color-chat-citation-badge-bg: rgba(255, 255, 255, 0.92);
+  --color-chat-citation-chip-bg: rgba(242, 246, 252, 0.95);
+  --color-chat-citation-chip-hover: rgba(235, 243, 255, 0.98);
+  --color-chat-citation-rail-border: rgba(213, 221, 234, 0.8);
+  --color-chat-citation-rail-shadow: 0 18px 28px rgba(24, 56, 103, 0.06);
+  --color-chat-citation-card-border: rgba(213, 221, 234, 0.86);
+  --color-chat-citation-card-shadow: 0 12px 20px rgba(25, 47, 77, 0.05);
+  --color-chat-input-bg: rgba(255, 255, 255, 0.92);
+  --color-chat-input-border: rgba(36, 82, 151, 0.28);
+  --color-chat-input-inset: rgba(219, 227, 239, 0.8);
+  --color-chat-card-border: rgba(205, 214, 229, 0.9);
+  --color-chat-card-shadow: 0 12px 28px rgba(25, 47, 77, 0.06);
+  --color-chat-composer-shell: rgba(255, 255, 255, 0.34);
+  --color-chat-composer-border: rgba(205, 214, 229, 0.9);
+  --color-chat-composer-shadow: 0 16px 32px rgba(40, 79, 141, 0.08);
+
   --animate-chrome-in: chrome-in 0.55s ease;
   --animate-panel-in: panel-in 0.24s ease;
   --animate-map-in: map-in 0.7s ease;
+}
+
+:root[data-theme='dark'] {
+  --color-ink-900: #edf4ff;
+  --color-ink-700: #d2deef;
+  --color-ink-600: #b4c4d8;
+  --color-ink-500: #8ea1bb;
+  --color-ink-400: #6f819a;
+  --color-ink-300: #4c5f79;
+
+  --color-accent-700: #90b8ff;
+  --color-accent-600: #6ea2ff;
+  --color-tone-blue: #74a8ff;
+  --color-tone-teal: #4bd4b5;
+  --color-tone-ink-soft: #93a9c7;
+  --color-surface-app: #07111f;
+  --color-app-gradient-mid: #0b1728;
+  --color-app-gradient-end: #0f1c2f;
+  --color-app-glow-a: rgba(40, 92, 172, 0.24);
+  --color-app-glow-b: rgba(11, 120, 109, 0.18);
+  --color-overlay-glow-a: rgba(71, 111, 191, 0.16);
+  --color-overlay-glow-b: rgba(20, 141, 170, 0.1);
+  --color-modal-backdrop: rgba(2, 8, 18, 0.46);
+  --color-surface-card: rgba(11, 22, 38, 0.9);
+  --color-surface-card-strong: rgba(14, 28, 47, 0.96);
+  --color-surface-panel: rgba(10, 20, 36, 0.9);
+  --color-surface-panel-strong: rgba(12, 24, 42, 0.94);
+  --color-surface-panel-soft: rgba(19, 33, 54, 0.92);
+  --color-surface-filter: rgba(18, 31, 52, 0.95);
+  --color-surface-filter-strong: rgba(24, 41, 68, 0.95);
+  --color-surface-search: rgba(12, 24, 42, 0.94);
+  --color-surface-search-strong: rgba(18, 31, 53, 0.96);
+  --color-surface-accent: rgba(110, 162, 255, 0.16);
+  --color-surface-accent-soft: rgba(110, 162, 255, 0.12);
+  --color-surface-accent-strong: rgba(28, 50, 82, 0.9);
+  --color-surface-empty: rgba(18, 31, 53, 0.82);
+  --color-surface-error: rgba(59, 21, 28, 0.9);
+  --color-surface-teal: rgba(75, 212, 181, 0.14);
+  --color-border-soft: rgba(72, 92, 122, 0.8);
+  --color-border-panel: rgba(68, 91, 124, 0.7);
+  --color-border-field: rgba(71, 95, 129, 0.82);
+  --color-border-option: rgba(60, 82, 111, 0.76);
+  --color-border-highlight: rgba(110, 162, 255, 0.46);
+  --color-border-highlight-soft: rgba(110, 162, 255, 0.24);
+  --color-border-white-soft: rgba(42, 59, 86, 0.92);
+  --color-border-white-strong: rgba(54, 74, 106, 0.95);
+  --color-border-app: rgba(71, 95, 129, 0.52);
+  --color-border-header: rgba(58, 79, 110, 0.74);
+
+  --shadow-panel: 0 24px 48px rgba(2, 8, 18, 0.48);
+  --shadow-panel-strong: 0 32px 60px rgba(0, 0, 0, 0.46);
+  --shadow-sidebar: 18px 0 40px rgba(0, 0, 0, 0.26);
+  --shadow-sidebar-mobile: 0 28px 56px rgba(0, 0, 0, 0.34);
+  --shadow-search: 0 28px 60px rgba(0, 0, 0, 0.34);
+  --shadow-overlay: 0 20px 36px rgba(0, 0, 0, 0.28);
+  --shadow-card: inset 0 0 0 1px rgba(55, 75, 102, 0.74), 0 18px 26px rgba(0, 0, 0, 0.18);
+  --shadow-card-active: inset 0 0 0 1px rgba(110, 162, 255, 0.36), 0 24px 36px rgba(0, 0, 0, 0.26);
+  --shadow-inset-soft: inset 0 0 0 1px rgba(56, 76, 104, 0.82);
+  --shadow-inset-accent: inset 0 0 0 1px rgba(110, 162, 255, 0.16);
+  --shadow-inset-field: inset 0 0 0 1px rgba(55, 76, 104, 0.84);
+  --shadow-inset-filter: inset 0 0 0 1px rgba(110, 162, 255, 0.26);
+  --shadow-chip: 0 8px 18px rgba(0, 0, 0, 0.2);
+  --shadow-avatar: 0 12px 20px rgba(0, 0, 0, 0.24);
+
+  --color-chat-shell: #151824;
+  --color-chat-header: rgba(22, 25, 38, 0.94);
+  --color-chat-body: linear-gradient(180deg, rgba(25, 31, 47, 0.98) 0%, rgba(21, 24, 36, 0.98) 100%);
+  --color-chat-footer: rgba(18, 21, 33, 0.98);
+  --color-chat-icon-bg: radial-gradient(circle at 30% 30%, rgba(110, 162, 255, 0.22), rgba(110, 162, 255, 0.08) 58%, transparent 72%);
+  --color-chat-orb-glow: radial-gradient(circle at 30% 30%, rgba(110, 162, 255, 0.24), rgba(110, 162, 255, 0.08) 68%, transparent 72%);
+  --color-chat-orb-core: rgba(28, 35, 54, 0.98);
+  --color-chat-prompt-bg: rgba(30, 38, 56, 0.98);
+  --color-chat-prompt-hover: rgba(36, 45, 66, 0.98);
+  --color-chat-assistant-surface: rgba(31, 39, 58, 0.98);
+  --color-chat-citation-rail: rgba(24, 31, 47, 0.98);
+  --color-chat-citation-card: rgba(49, 60, 82, 0.98);
+  --color-chat-citation-card-hover: rgba(56, 69, 94, 0.98);
+  --color-chat-citation-badge-bg: rgba(242, 247, 255, 0.96);
+  --color-chat-citation-chip-bg: rgba(29, 38, 56, 0.98);
+  --color-chat-citation-chip-hover: rgba(36, 45, 66, 0.98);
+  --color-chat-citation-rail-border: rgba(58, 73, 101, 0.88);
+  --color-chat-citation-rail-shadow: 0 18px 34px rgba(0, 0, 0, 0.24);
+  --color-chat-citation-card-border: rgba(77, 92, 120, 0.88);
+  --color-chat-citation-card-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+  --color-chat-input-bg: rgba(31, 38, 56, 0.98);
+  --color-chat-input-border: rgba(110, 162, 255, 0.28);
+  --color-chat-input-inset: rgba(63, 80, 108, 0.64);
+  --color-chat-card-border: rgba(72, 86, 112, 0.88);
+  --color-chat-card-shadow: 0 18px 36px rgba(0, 0, 0, 0.24);
+  --color-chat-composer-shell: rgba(17, 21, 33, 0.96);
+  --color-chat-composer-border: rgba(78, 93, 120, 0.86);
+  --color-chat-composer-shadow: 0 18px 36px rgba(0, 0, 0, 0.26);
 }
 
 @keyframes chrome-in {
@@ -203,8 +331,8 @@
 
   body {
     margin: 0;
-    background: #edf3fb;
-    color: #17304d;
+    background: var(--color-surface-app);
+    color: var(--color-ink-900);
     font-family: var(--font-sans);
     font-weight: 400;
     line-height: 1.5;
@@ -212,6 +340,7 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 180ms ease, color 180ms ease;
   }
 
   body,
@@ -261,6 +390,16 @@
     );
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.35s ease-in-out infinite;
+  }
+
+  :root[data-theme='dark'] .skeleton-block {
+    background: linear-gradient(
+      90deg,
+      rgba(33, 49, 75, 0.92) 0%,
+      rgba(52, 72, 103, 0.96) 50%,
+      rgba(33, 49, 75, 0.92) 100%
+    );
+    background-size: 200% 100%;
   }
 
   .facility-marker__halo {
@@ -358,6 +497,19 @@
   .mapboxgl-ctrl-group {
     border-radius: 18px !important;
     box-shadow: 0 16px 28px rgba(22, 60, 108, 0.12) !important;
+  }
+
+  :root[data-theme='dark'] .mapboxgl-ctrl-group {
+    background: rgba(10, 20, 36, 0.92) !important;
+    box-shadow: 0 16px 28px rgba(0, 0, 0, 0.28) !important;
+  }
+
+  :root[data-theme='dark'] .mapboxgl-ctrl-group button {
+    background: transparent !important;
+  }
+
+  :root[data-theme='dark'] .mapboxgl-ctrl-group button span {
+    filter: invert(1) brightness(1.4);
   }
 
   .mapboxgl-ctrl-group button {
