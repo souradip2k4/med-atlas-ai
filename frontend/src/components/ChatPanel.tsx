@@ -226,7 +226,7 @@ export function ChatPanel() {
                 <h3 className="mb-2 text-[1.55rem] font-semibold tracking-[-0.03em] text-ink-900">
                   Ask the healthcare assistant
                 </h3>
-                <p className="mb-8 max-w-[360px] text-[0.98rem] leading-7 text-ink-500">
+                <p className="mb-8 max-w-[360px] text-[0.98rem] leading-7 text-ink-7">
                   Search equipment, trace service gaps, compare facilities, and validate claims against the Ghana medical dataset.
                 </p>
                 <div className="flex w-full flex-col gap-2">
@@ -236,7 +236,7 @@ export function ChatPanel() {
                       type="button"
                       disabled={isAnyLoading}
                       onClick={() => handleSubmit(prompt)}
-                      className="rounded-xl border border-border-app/80 bg-[var(--color-chat-prompt-bg)] p-3 text-left text-[0.85rem] font-medium text-ink-700 shadow-[0_10px_24px_rgba(79,141,247,0.05)] transition hover:border-border-highlight hover:bg-[var(--color-chat-prompt-hover)] disabled:opacity-50"
+                      className="rounded-xl border border-border-app/80 bg-surface-panel-soft p-3 text-left text-[0.85rem] font-medium text-ink-900 shadow-[0_10px_24px_rgba(79,141,247,0.05)] transition hover:border-border-highlight hover:bg-surface-panel-soft disabled:opacity-50"
                     >
                       {prompt}
                     </button>

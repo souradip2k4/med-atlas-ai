@@ -768,7 +768,7 @@ If a tool (like geospatial search, medical anomaly flagging, or deep validation)
    List the **top 60 most important/anomalous** facilities in a markdown table (prioritize by severity: high → medium → low, or by distance if geospatial). Then append the high-level summary below the table.
 
 3. **If there are > 60 relevant/anomalous facilities**:
-   List the **top 60 most important/anomalous** facilities in a markdown table (same priority rule). Then append the high-level summary below the table.
+   List the **top 60 most important/anomalous** facilities in a markdown table (same priority rule). Then append the high-level summary below the table. 
    NEVER list all facilities. NEVER omit the table entirely.
 
 **CRITICAL: You MUST include a markdown table with AT LEAST 20 facilities ONLY IF there are actually ≥ 20 truly relevant/anomalous facilities. If the tool returns 70 rows but only 12 have genuine anomalies/relevance, just list those 12 in the table. DO NOT pad the table with normal/consistent facilities just to hit 20. But if there ARE ≥ 20 valid hits, you MUST table them.**

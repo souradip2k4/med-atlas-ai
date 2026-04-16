@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from ai_agent.api.schemas.map import MapSearchRequest, FilterMetadata, FacilityPoint
+from ai_agent.api.schemas.map import MapSearchRequest, FilterMetadata, FacilityPoint, ExtractMapMarkersRequest, ExtractMapMarkersResponse
 from ai_agent.api.services.databricks_sql import execute_sql
 
 router = APIRouter(prefix="/map", tags=["Map"])
@@ -143,3 +143,132 @@ def get_facility(facility_id: str):
     if not results:
         return {"error": "Facility not found"}
     return results[0]
+
+@router.post("/extract-map-markers", response_model=ExtractMapMarkersResponse)
+def extract_map_markers(request: ExtractMapMarkersRequest):
+    """
+    Extract facility names from the final markdown response and return their coordinates.
+    
+    Expected JSON Payload:
+    {
+        "markdown": "**Answer:** ... [final markdown string here]"
+    }
+    """
+    import json
+    from databricks_langchain import ChatDatabricks
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from ai_agent.agent import LLM_ENDPOINT
+    
+    # Step 1: Use LLM to extract facility names from the markdown
+    llm = ChatDatabricks(endpoint=LLM_ENDPOINT, temperature=0.0, max_tokens=2048)
+    
+    system_prompt = (
+        "You are an expert data parser. Your exact task is to extract ALL specific medical facility names "
+        "(hospitals, clinics, NGOs, etc.) explicitly mentioned in the provided markdown text. Look carefully inside markdown tables or lists.\n\n"
+        "CRITICAL RULES:\n"
+        "1. Extract the CLEAN facility name ONLY. Strip out any parenthetical tags, location names in brackets, "
+        "facility type labels, IDs, duplicate warnings, or trailing dashes. Examples of cleaning:\n"
+        "   - 'Eye Hospital In Accra (Accra) – hospital' -> Eye Hospital In Accra\n"
+        "   - 'Bromley Park Dental Clinic (clinic)' -> Bromley Park Dental Clinic\n"
+        "   - 'Chrispod Hospital & Diagnostic Center (duplicate entry)' -> Chrispod Hospital & Diagnostic Center\n"
+        "   - 'Nunana Clinic (ID e58cd378-b972-4a1a-97d5-e55a3828dd76)' -> Nunana Clinic\n"
+        "2. Do NOT extract standalone region/state/district names (e.g., do not extract just 'Greater Accra' or 'Ashanti' on their own). "
+        "HOWEVER, if the region name is part of the actual facility name (e.g., 'Greater Accra Regional Hospital'), you MUST extract the full facility name.\n"
+        "3. If there are NO specific facility names mentioned in the text, you MUST return the exact word: NONE\n\n"
+        "Return ONLY a plain text list with one facility name per line. completely omit array brackets, commas, or quotes. Do not include markdown tags like ``` or any other conversational text."
+    )
+    
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=request.markdown)
+    ]
+    
+    response = llm.invoke(messages)
+    
+    # Handle both string and list content from AIMessage
+    if isinstance(response.content, list):
+        texts = []
+        for c in response.content:
+            if isinstance(c, dict):
+                texts.append(c.get("text", ""))
+            else:
+                texts.append(str(c))
+        raw_text = "".join(texts).strip()
+    else:
+        raw_text = str(response.content).strip()
+    
+    # Clean up potential markdown formatting in the LLM response
+    if raw_text.startswith("```text"):
+        raw_text = raw_text[7:]
+    elif raw_text.startswith("```"):
+        raw_text = raw_text[3:]
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
+    raw_text = raw_text.strip()
+    
+    if raw_text.upper() == "NONE" or not raw_text:
+        names = []
+    else:
+        # Split by newlines, clean up bullet points or dashes if the LLM hallucinated them
+        raw_lines = raw_text.split("\n")
+        names = []
+        for line in raw_lines:
+            clean_line = line.strip().strip("-*\"',[] ").strip()
+            # Try to safely decode weird unicode narrow-no-break spaces
+            clean_line = clean_line.replace("\u202f", " ").replace("\u00a0", " ")
+            if clean_line:
+                names.append(clean_line)
+    
+    if not names:
+        return ExtractMapMarkersResponse(
+            map_markers=[], 
+            extracted_names=[], 
+            raw_sql_results=[]
+        )
+        
+    # Step 2: Use SQL to fetch coordinates for the exact names via LIKE clause
+    # Build dynamic OR clauses for each extracted name
+    or_clauses = []
+    for name in names:
+        escaped_name = _escape(name).lower()
+        or_clauses.append(f"LOWER(facility_name) LIKE '%{escaped_name}%'")
+        
+    or_clause_str = " OR ".join(or_clauses)
+    
+    query = f"""
+        SELECT facility_id, facility_name, latitude, longitude
+        FROM med_atlas_ai.default.facility_records
+        WHERE organization_type IN ('facility', 'ngo')
+          AND latitude IS NOT NULL
+          AND longitude IS NOT NULL
+          AND ({or_clause_str})
+        LIMIT 50
+    """
+    
+    results = execute_sql(query)
+    
+    markers = []
+    # Deduplicate by facility_id to avoid multiple hits
+    seen_ids = set()
+    
+    for row in results:
+        f_id = row.get("facility_id")
+        if f_id and f_id not in seen_ids:
+            seen_ids.add(f_id)
+            try:
+                lat = float(row.get("latitude"))
+                lng = float(row.get("longitude"))
+                markers.append({
+                    "id": f_id,
+                    "name": row.get("facility_name"),
+                    "latitude": lat,
+                    "longitude": lng
+                })
+            except (ValueError, TypeError):
+                continue
+                
+    return ExtractMapMarkersResponse(
+        map_markers=markers,
+        extracted_names=names,
+        raw_sql_results=results
+    )

@@ -36,3 +36,17 @@ class FilterMetadata(BaseModel):
     facility_types: List[str]
     operator_types: List[str]
     organization_types: List[str]
+
+class ExtractMapMarkersRequest(BaseModel):
+    markdown: str = Field(..., description="The final markdown response containing facility names.")
+
+class MapMarker(BaseModel):
+    id: str
+    name: str
+    latitude: float
+    longitude: float
+
+class ExtractMapMarkersResponse(BaseModel):
+    map_markers: List[MapMarker]
+    extracted_names: List[str] = []
+    raw_sql_results: List[dict] = []
