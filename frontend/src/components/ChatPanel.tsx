@@ -1,8 +1,9 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   BotMessageSquare,
+  MapPinned,
   SendHorizontal,
   RotateCcw,
   Sparkles,
@@ -10,9 +11,10 @@ import {
   X,
 } from 'lucide-react';
 import { useUIStore } from '../store/ui-store';
-import { invokeAgent } from '../lib/api';
+import { extractMapMarkers, invokeAgent } from '../lib/api';
 import { ChatCitationsView } from './ChatCitationsView';
-import type { AgentResponse } from '../lib/types';
+import { ChatMappedFacilitiesView } from './ChatMappedFacilitiesView';
+import type { AgentResponse, ExtractedMapMarker } from '../lib/types';
 
 const SUGGESTED_PROMPTS = [
   'Show anomalies in Northern region',
@@ -20,27 +22,37 @@ const SUGGESTED_PROMPTS = [
   'Find clinics within 20km of Accra',
 ];
 
+const MIN_CHAT_WIDTH_VW = 20;
+const MAX_CHAT_WIDTH_VW = 55;
+
 export function ChatPanel() {
   const {
     chatOpen,
     chatEntries,
     viewingCitationsId,
+    viewingMappedFacilitiesId,
     toggleChat,
     addChatEntry,
     updateChatEntry,
     clearChat,
     setViewingCitationsId,
+    setViewingMappedFacilitiesId,
     setAgentMarkers,
+    setExtractedMapMarkers,
   } = useUIStore();
 
   const [inputVal, setInputVal] = useState('');
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isResizingRef = useRef(false);
   const activeRequestIdRef = useRef<string | null>(null);
   const stoppedRequestIdsRef = useRef<Set<string>>(new Set());
+  const [desktopWidthVw, setDesktopWidthVw] = useState(MAX_CHAT_WIDTH_VW);
 
   const isAnyLoading = chatEntries.some((e) => e.isLoading);
   const viewedCitations = chatEntries.find((e) => e.id === viewingCitationsId)?.citations;
+  const viewedMappedFacilities =
+    chatEntries.find((e) => e.id === viewingMappedFacilitiesId)?.extractedMapMarkers ?? [];
 
   useEffect(() => {
     if (chatOpen && !viewingCitationsId) {
@@ -49,6 +61,52 @@ export function ChatPanel() {
       setTimeout(() => inputRef.current?.focus(), 350);
     }
   }, [chatEntries.length, chatOpen, viewingCitationsId]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!isResizingRef.current || window.innerWidth < 921) {
+        return;
+      }
+
+      const nextWidth = ((window.innerWidth - event.clientX) / window.innerWidth) * 100;
+      const clampedWidth = Math.min(MAX_CHAT_WIDTH_VW, Math.max(MIN_CHAT_WIDTH_VW, nextWidth));
+      setDesktopWidthVw(clampedWidth);
+    };
+
+    const stopResize = () => {
+      if (!isResizingRef.current) {
+        return;
+      }
+
+      isResizingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResize);
+    window.addEventListener('pointercancel', stopResize);
+    window.addEventListener('blur', stopResize);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopResize);
+      window.removeEventListener('pointercancel', stopResize);
+      window.removeEventListener('blur', stopResize);
+      stopResize();
+    };
+  }, []);
+
+  const handleResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (window.innerWidth < 921) {
+      return;
+    }
+
+    isResizingRef.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
 
   const handleSubmit = async (userText: string) => {
     if (!userText.trim() || isAnyLoading) return;
@@ -66,6 +124,9 @@ export function ChatPanel() {
       isError: false,
       errorMessage: null,
       referencedFacilities: [],
+      extractedMapMarkers: [],
+      extractedMapMarkersStatus: 'idle',
+      extractedMapMarkersError: null,
     });
 
     setInputVal('');
@@ -115,7 +176,41 @@ export function ChatPanel() {
         assistantMessage: text,
         citations: response.citations,
         referencedFacilities: markers,
+        extractedMapMarkersStatus: 'loading',
+        extractedMapMarkersError: null,
       });
+
+      void (async () => {
+        try {
+          let extractionResponse = await extractMapMarkers(text);
+          if (extractionResponse.map_markers.length === 0) {
+            extractionResponse = await extractMapMarkers(text);
+          }
+
+          if (stoppedRequestIdsRef.current.has(entryId)) {
+            return;
+          }
+
+          updateChatEntry(entryId, {
+            extractedMapMarkers: extractionResponse.map_markers,
+            extractedMapMarkersStatus: 'success',
+            extractedMapMarkersError: null,
+          });
+
+          const latestEntryId = useUIStore.getState().chatEntries.at(-1)?.id ?? null;
+          if (latestEntryId === entryId) {
+            setExtractedMapMarkers(entryId, extractionResponse.map_markers);
+          }
+        } catch (error) {
+          updateChatEntry(entryId, {
+            extractedMapMarkers: [],
+            extractedMapMarkersStatus: 'error',
+            extractedMapMarkersError:
+              error instanceof Error ? error.message : 'Map extraction failed.',
+          });
+        }
+      })();
+
       if (activeRequestIdRef.current === entryId) {
         activeRequestIdRef.current = null;
       }
@@ -152,11 +247,20 @@ export function ChatPanel() {
       assistantMessage: null,
       citations: null,
       referencedFacilities: [],
+      extractedMapMarkers: [],
+      extractedMapMarkersStatus: 'idle',
+      extractedMapMarkersError: null,
       isError: false,
       errorMessage: null,
     });
     setAgentMarkers([]);
+    setExtractedMapMarkers(null, []);
     activeRequestIdRef.current = null;
+  };
+
+  const activateExtractedMarkers = (entryId: string, markers: ExtractedMapMarker[]) => {
+    setExtractedMapMarkers(entryId, markers);
+    setViewingMappedFacilitiesId(entryId);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -169,8 +273,27 @@ export function ChatPanel() {
   if (!chatOpen) return null;
 
   return (
-    <aside className="absolute inset-x-3 bottom-3 top-3 z-[40] flex min-w-0 flex-col overflow-hidden rounded-[24px] border border-border-white-strong bg-[var(--color-chat-shell)] shadow-panel-strong backdrop-blur-[16px] animate-chat-in min-[921px]:relative min-[921px]:inset-auto min-[921px]:z-20 min-[921px]:h-dvh min-[921px]:w-[55vw] min-[921px]:min-w-[560px] min-[921px]:shrink-0 min-[921px]:rounded-none min-[921px]:border-y-0 min-[921px]:border-r-0 min-[921px]:border-l min-[921px]:border-border-app min-[921px]:shadow-[-20px_0_48px_rgba(19,42,73,0.1)]">
-      {viewingCitationsId && viewedCitations ? (
+    <aside
+      className="absolute inset-x-3 bottom-3 top-3 z-[40] flex min-w-0 flex-col overflow-hidden rounded-[24px] border border-border-white-strong bg-[var(--color-chat-shell)] shadow-panel-strong backdrop-blur-[16px] animate-chat-in min-[921px]:relative min-[921px]:inset-auto min-[921px]:z-20 min-[921px]:h-dvh min-[921px]:shrink-0 min-[921px]:rounded-none min-[921px]:border-y-0 min-[921px]:border-r-0 min-[921px]:border-l min-[921px]:border-border-app min-[921px]:shadow-[-20px_0_48px_rgba(19,42,73,0.1)]"
+      style={{
+        width: window.innerWidth >= 921 ? `${desktopWidthVw}vw` : undefined,
+      }}
+    >
+      <button
+        type="button"
+        onPointerDown={handleResizeStart}
+        className="absolute inset-y-0 left-0 z-[2] hidden w-3 -translate-x-1/2 cursor-col-resize border-0 bg-transparent min-[921px]:block"
+        aria-label="Resize chat panel"
+      >
+        <span className="absolute left-1/2 top-1/2 h-24 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-surface-card/35 opacity-0 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition hover:opacity-100 focus:opacity-100" />
+      </button>
+      {viewingMappedFacilitiesId && viewedMappedFacilities.length > 0 ? (
+        <ChatMappedFacilitiesView
+          entryId={viewingMappedFacilitiesId}
+          facilities={viewedMappedFacilities}
+          onClose={() => setViewingMappedFacilitiesId(null)}
+        />
+      ) : viewingCitationsId && viewedCitations ? (
         <ChatCitationsView 
           citations={viewedCitations} 
           onClose={() => setViewingCitationsId(null)} 
@@ -197,6 +320,7 @@ export function ChatPanel() {
                   onClick={() => {
                     clearChat();
                     setAgentMarkers([]);
+                    setExtractedMapMarkers(null, []);
                   }}
                   className="rounded-full px-3 py-1.5 text-[0.8rem] font-semibold text-ink-500 transition hover:bg-surface-accent hover:text-accent-700"
                 >
@@ -283,16 +407,58 @@ export function ChatPanel() {
                         </div>
                       )}
 
-                      {entry.citations && entry.citations.summary.total_sources > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setViewingCitationsId(entry.id)}
-                          className="ml-1 mt-1 inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M3 19h6"/><path d="M10 12h.01"/></svg>
-                          View {entry.citations.summary.total_sources} source{entry.citations.summary.total_sources > 1 && 's'}
-                        </button>
-                      )}
+                      {(entry.citations && entry.citations.summary.total_sources > 0) ||
+                      entry.extractedMapMarkersStatus !== 'idle' ? (
+                        <div className="ml-1 mt-1 flex flex-wrap items-center gap-2">
+                          {entry.citations && entry.citations.summary.total_sources > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setViewingCitationsId(entry.id)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M3 19h6"/><path d="M10 12h.01"/></svg>
+                              View {entry.citations.summary.total_sources} source{entry.citations.summary.total_sources > 1 && 's'}
+                            </button>
+                          ) : null}
+
+                          {entry.extractedMapMarkersStatus === 'loading' ? (
+                            <div className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500">
+                              <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_infinite]" />
+                              <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_0.2s_infinite]" />
+                              <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_0.4s_infinite]" />
+                              Finding facilities on map...
+                            </div>
+                          ) : null}
+
+                          {entry.extractedMapMarkersStatus === 'success' && entry.extractedMapMarkers.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => activateExtractedMarkers(entry.id, entry.extractedMapMarkers)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
+                            >
+                              <MapPinned className="size-3.5" strokeWidth={2.2} />
+                              View {entry.extractedMapMarkers.length} mapped facilit{entry.extractedMapMarkers.length === 1 ? 'y' : 'ies'}
+                            </button>
+                          ) : null}
+
+                          {entry.extractedMapMarkersStatus === 'success' && entry.extractedMapMarkers.length === 0 ? (
+                            <div className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500/80">
+                              <MapPinned className="size-3.5" strokeWidth={2.2} />
+                              No mapped facilities
+                            </div>
+                          ) : null}
+
+                          {entry.extractedMapMarkersStatus === 'error' ? (
+                            <div
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500/80"
+                              title={entry.extractedMapMarkersError ?? 'Map extraction unavailable'}
+                            >
+                              <MapPinned className="size-3.5" strokeWidth={2.2} />
+                              Map extraction unavailable
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}

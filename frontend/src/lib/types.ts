@@ -135,6 +135,21 @@ export interface AgentResponse {
   endpoint: string;
 }
 
+export type ChatMapMarkersStatus = 'idle' | 'loading' | 'success' | 'error';
+
+export interface ExtractedMapMarker {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface ExtractMapMarkersResponse {
+  map_markers: ExtractedMapMarker[];
+  extracted_names: string[];
+  raw_sql_results: Array<Record<string, unknown>>;
+}
+
 export interface ChatEntry {
   id: string;
   userMessage: string;
@@ -149,4 +164,7 @@ export interface ChatEntry {
     latitude: number;
     longitude: number;
   }>;
+  extractedMapMarkers: ExtractedMapMarker[];
+  extractedMapMarkersStatus: ChatMapMarkersStatus;
+  extractedMapMarkersError: string | null;
 }

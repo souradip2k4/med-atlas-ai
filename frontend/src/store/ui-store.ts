@@ -5,6 +5,7 @@ import type {
   BoundingBox,
   ChatEntry,
   DropdownKey,
+  ExtractedMapMarker,
   SearchFilters,
   ThemePreference,
 } from '../lib/types';
@@ -30,6 +31,7 @@ interface UIState {
   chatOpen: boolean;
   chatEntries: ChatEntry[];
   viewingCitationsId: string | null;
+  viewingMappedFacilitiesId: string | null;
   themePreference: ThemePreference;
   agentMarkers: Array<{
     facility_id: string;
@@ -37,6 +39,8 @@ interface UIState {
     latitude: number;
     longitude: number;
   }>;
+  extractedMapMarkers: ExtractedMapMarker[];
+  activeExtractedMapEntryId: string | null;
   setChatOpen: (open: boolean) => void;
   toggleChat: () => void;
   setThemePreference: (theme: ThemePreference) => void;
@@ -44,7 +48,9 @@ interface UIState {
   addChatEntry: (entry: ChatEntry) => void;
   updateChatEntry: (id: string, updates: Partial<ChatEntry>) => void;
   setViewingCitationsId: (id: string | null) => void;
+  setViewingMappedFacilitiesId: (id: string | null) => void;
   setAgentMarkers: (markers: UIState['agentMarkers']) => void;
+  setExtractedMapMarkers: (entryId: string | null, markers: ExtractedMapMarker[]) => void;
   clearChat: () => void;
   setActiveDropdown: (dropdown: DropdownKey) => void;
   setAdvancedOpen: (open: boolean) => void;
@@ -79,8 +85,11 @@ export const useUIStore = create<UIState>()(
       chatOpen: true,
       chatEntries: [],
       viewingCitationsId: null,
+      viewingMappedFacilitiesId: null,
       themePreference: 'system',
       agentMarkers: [],
+      extractedMapMarkers: [],
+      activeExtractedMapEntryId: null,
       setChatOpen: (open) => set({ chatOpen: open }),
       toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
       setThemePreference: (themePreference) => set({ themePreference }),
@@ -99,8 +108,22 @@ export const useUIStore = create<UIState>()(
           ),
         })),
       setViewingCitationsId: (id) => set({ viewingCitationsId: id }),
+      setViewingMappedFacilitiesId: (id) => set({ viewingMappedFacilitiesId: id }),
       setAgentMarkers: (markers) => set({ agentMarkers: markers }),
-      clearChat: () => set({ chatEntries: [], viewingCitationsId: null, agentMarkers: [] }),
+      setExtractedMapMarkers: (entryId, markers) =>
+        set({
+          activeExtractedMapEntryId: entryId,
+          extractedMapMarkers: markers,
+        }),
+      clearChat: () =>
+        set({
+          chatEntries: [],
+          viewingCitationsId: null,
+          viewingMappedFacilitiesId: null,
+          agentMarkers: [],
+          extractedMapMarkers: [],
+          activeExtractedMapEntryId: null,
+        }),
       setActiveDropdown: (dropdown) => set({ activeDropdown: dropdown }),
       setAdvancedOpen: (open) => set({ advancedOpen: open }),
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),

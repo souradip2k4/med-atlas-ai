@@ -1,4 +1,5 @@
-import { ArrowLeft, Network, MapPin } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, ChevronDown, Network, MapPin } from 'lucide-react';
 import { useUIStore } from '../store/ui-store';
 import type { AgentCitations } from '../lib/types';
 
@@ -7,11 +8,21 @@ interface ChatCitationsViewProps {
   onClose: () => void;
 }
 
+const DEFAULT_VISIBLE_SOURCE_COUNT = 10;
+
 export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps) {
   const { setSelectedFacilityId } = useUIStore();
+  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
 
   const handleFacilityClick = (facilityId: string) => {
     setSelectedFacilityId(facilityId);
+  };
+
+  const toggleStepExpansion = (stepKey: string) => {
+    setExpandedSteps((current) => ({
+      ...current,
+      [stepKey]: !current[stepKey],
+    }));
   };
 
   return (
@@ -34,8 +45,15 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
       </div>
 
       <div className="flex-1 overflow-y-auto bg-[var(--color-chat-body)] px-5 py-4 scrollbar-thin">
-        {citations.steps.map((step, idx) => (
-          <div key={idx} className="mb-6 last:mb-2">
+        {citations.steps.map((step, idx) => {
+          const stepKey = step.call_id || `${step.tool_name}-${idx}`;
+          const sources = step.sources ?? [];
+          const isExpanded = Boolean(expandedSteps[stepKey]);
+          const hasOverflow = sources.length > DEFAULT_VISIBLE_SOURCE_COUNT;
+          const visibleSources = isExpanded ? sources : sources.slice(0, DEFAULT_VISIBLE_SOURCE_COUNT);
+
+          return (
+            <div key={stepKey} className="mb-6 last:mb-2">
             <div className="mb-3">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-surface-filter px-2.5 py-1 text-[0.75rem] font-bold text-ink-600 mb-1">
                 <Network className="size-3" strokeWidth={2.5} />
@@ -47,21 +65,20 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
             </div>
 
             <div className="grid gap-2 rounded-[26px] border border-[var(--color-chat-citation-rail-border)] bg-[var(--color-chat-citation-rail)] p-2 shadow-[var(--color-chat-citation-rail-shadow)]">
-              {step.sources?.map((source, sIdx) => (
-                <div
-                  key={sIdx}
-                  className="group rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-surface-panel-soft p-3.5 shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-[var(--color-chat-citation-card-hover)]"
+              {visibleSources.map((source, sIdx) => (
+                <button
+                  key={`${stepKey}-${sIdx}`}
+                  type="button"
+                  onClick={() => source.facility_id && handleFacilityClick(source.facility_id)}
+                  disabled={!source.facility_id}
+                  className="group w-full rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-[var(--color-chat-citation-card)] p-3.5 text-left shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-[var(--color-chat-citation-card-hover)] disabled:cursor-default disabled:hover:bg-[var(--color-chat-citation-card)]"
                 >
                   <div className="flex items-start justify-between gap-2 mb-1.5">
                     {source.facility_name ? (
-                      <button
-                        type="button"
-                        onClick={() => source.facility_id && handleFacilityClick(source.facility_id)}
-                        className="text-[0.85rem] font-semibold text-accent-700 text-left hover:underline flex items-start gap-1 p-0 bg-transparent border-0"
-                      >
+                      <div className="flex items-start gap-1 text-[0.85rem] font-semibold text-accent-700">
                         <MapPin className="size-3 mt-0.5 shrink-0 opacity-70" />
                         <span>{source.facility_name}</span>
-                      </button>
+                      </div>
                     ) : (
                       <strong className="text-[0.85rem] font-semibold text-ink-900">
                         {source.source_type}
@@ -73,20 +90,41 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
                       </span>
                     )}
                   </div>
-                  <div className="text-[0.8rem] text-ink-700 leading-relaxed line-clamp-3 group-hover:line-clamp-none transition-all">
-                    {source.excerpt}
-                  </div>
-                </div>
+                  {source.excerpt ? (
+                    <div className="text-[0.8rem] text-ink-700 leading-relaxed line-clamp-3 group-hover:line-clamp-none transition-all">
+                      {source.excerpt}
+                    </div>
+                  ) : null}
+                </button>
               ))}
-              
-              {(!step.sources || step.sources.length === 0) && (
+
+              {sources.length === 0 && (
                 <div className="p-3 text-[0.8rem] text-ink-500 italic text-center">
                   No direct sources captured in tracking for this step.
                 </div>
               )}
             </div>
-          </div>
-        ))}
+
+            {hasOverflow ? (
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => toggleStepExpansion(stepKey)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
+                >
+                  <ChevronDown
+                    className={`size-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                    strokeWidth={2.4}
+                  />
+                  {isExpanded
+                    ? 'Show fewer sources'
+                    : `Show ${sources.length - DEFAULT_VISIBLE_SOURCE_COUNT} more source${sources.length - DEFAULT_VISIBLE_SOURCE_COUNT === 1 ? '' : 's'}`}
+                </button>
+              </div>
+            ) : null}
+            </div>
+          );
+        })}
       </div>
 
       <div className="border-t border-border-app bg-[var(--color-chat-footer)] px-5 py-3 text-[0.75rem] text-ink-500">

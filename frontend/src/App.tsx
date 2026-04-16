@@ -42,6 +42,7 @@ function App() {
     toggleTheme,
     toggleSpecialty,
     agentMarkers,
+    extractedMapMarkers,
   } = useUIStore();
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
 
@@ -198,6 +199,7 @@ function App() {
             selectedFacilityId={selectedFacilityId}
             hoveredFacilityId={hoveredFacilityId}
             agentMarkers={agentMarkers}
+            extractedMapMarkers={extractedMapMarkers}
             onViewportChange={() => {}}
             onFacilitySelect={(facilityId) => {
               startTransition(() => {

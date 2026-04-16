@@ -7,6 +7,7 @@ import { GHANA_BOUNDS, GHANA_VIEW, formatLabel } from '../lib/format';
 import { MAPBOX_TOKEN } from '../lib/env';
 import type {
   BoundingBox,
+  ExtractedMapMarker,
   FacilityProfile,
   FacilitySummary,
   SearchFilters,
@@ -32,6 +33,7 @@ interface MapCanvasProps {
     latitude: number;
     longitude: number;
   }>;
+  extractedMapMarkers: ExtractedMapMarker[];
 }
 
 function createMarkerElement(active: boolean, label: string) {
@@ -54,6 +56,23 @@ function createAgentMarkerElement(label: string) {
   element.setAttribute('aria-label', label);
   element.innerHTML =
     '<span class="agent-marker__halo absolute inset-0 rounded-full"></span><span class="agent-marker__dot absolute inset-[3px] rounded-full"></span>';
+  return element;
+}
+
+function createExtractedMarkerElement(active: boolean, label: string) {
+  const element = document.createElement('button');
+  element.type = 'button';
+  element.className = active
+    ? 'extracted-marker extracted-marker--active relative h-10 w-10 border-0 bg-transparent'
+    : 'extracted-marker relative h-10 w-10 border-0 bg-transparent';
+  element.setAttribute('aria-label', label);
+  element.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" class="extracted-marker__icon">
+      <path d="M12 21s-5.5-4.7-5.5-10a5.5 5.5 0 1 1 11 0c0 5.3-5.5 10-5.5 10Z" class="extracted-marker__pin"/>
+      <circle cx="12" cy="10" r="3.2" class="extracted-marker__inner"/>
+      <path d="m10.5 10 1.1 1.1 2-2.2" class="extracted-marker__check"/>
+    </svg>
+  `;
   return element;
 }
 
@@ -109,6 +128,153 @@ function getMapBounds(map: mapboxgl.Map): BoundingBox {
   ];
 }
 
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
+}
+
+function haversineDistanceKm(
+  first: Pick<ExtractedMapMarker, 'latitude' | 'longitude'>,
+  second: Pick<ExtractedMapMarker, 'latitude' | 'longitude'>,
+) {
+  const earthRadiusKm = 6371;
+  const latitudeDelta = toRadians(second.latitude - first.latitude);
+  const longitudeDelta = toRadians(second.longitude - first.longitude);
+  const firstLatitude = toRadians(first.latitude);
+  const secondLatitude = toRadians(second.latitude);
+
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+
+  return 2 * earthRadiusKm * Math.asin(Math.sqrt(a));
+}
+
+function selectPrimaryExtractedCluster(markers: ExtractedMapMarker[]) {
+  if (markers.length <= 2) {
+    return markers;
+  }
+
+  const thresholdKm = 60;
+  const visited = new Set<number>();
+  const components: ExtractedMapMarker[][] = [];
+
+  for (let index = 0; index < markers.length; index += 1) {
+    if (visited.has(index)) {
+      continue;
+    }
+
+    const queue = [index];
+    const component: ExtractedMapMarker[] = [];
+    visited.add(index);
+
+    while (queue.length > 0) {
+      const currentIndex = queue.shift() as number;
+      component.push(markers[currentIndex]);
+
+      for (let nextIndex = 0; nextIndex < markers.length; nextIndex += 1) {
+        if (visited.has(nextIndex)) {
+          continue;
+        }
+
+        if (haversineDistanceKm(markers[currentIndex], markers[nextIndex]) <= thresholdKm) {
+          visited.add(nextIndex);
+          queue.push(nextIndex);
+        }
+      }
+    }
+
+    components.push(component);
+  }
+
+  const largestComponent = [...components].sort((first, second) => second.length - first.length)[0];
+  const majoritySize = Math.max(2, Math.ceil(markers.length / 2));
+
+  if (largestComponent && largestComponent.length >= majoritySize) {
+    return largestComponent;
+  }
+
+  const subsetSize = Math.max(2, Math.ceil(markers.length * 0.6));
+  let bestSubset = markers.slice(0, subsetSize);
+  let bestRadius = Number.POSITIVE_INFINITY;
+
+  markers.forEach((marker) => {
+    const nearest = [...markers]
+      .sort((first, second) => haversineDistanceKm(marker, first) - haversineDistanceKm(marker, second))
+      .slice(0, subsetSize);
+
+    const radius = nearest.reduce((maximum, candidate) => {
+      return Math.max(maximum, haversineDistanceKm(marker, candidate));
+    }, 0);
+
+    if (radius < bestRadius) {
+      bestRadius = radius;
+      bestSubset = nearest;
+    }
+  });
+
+  return bestSubset;
+}
+
+function getExtractedMarkerOffsets(
+  map: mapboxgl.Map,
+  markers: ExtractedMapMarker[],
+): Map<string, [number, number]> {
+  const overlapThresholdPx = 22;
+  const offsets = new Map<string, [number, number]>();
+  const assigned = new Set<number>();
+  const projectedPoints = markers.map((marker) => map.project([marker.longitude, marker.latitude]));
+
+  for (let index = 0; index < markers.length; index += 1) {
+    if (assigned.has(index)) {
+      continue;
+    }
+
+    const cluster = [index];
+    assigned.add(index);
+
+    for (let nextIndex = index + 1; nextIndex < markers.length; nextIndex += 1) {
+      if (assigned.has(nextIndex)) {
+        continue;
+      }
+
+      const dx = projectedPoints[index].x - projectedPoints[nextIndex].x;
+      const dy = projectedPoints[index].y - projectedPoints[nextIndex].y;
+      const distance = Math.hypot(dx, dy);
+
+      if (distance <= overlapThresholdPx) {
+        cluster.push(nextIndex);
+        assigned.add(nextIndex);
+      }
+    }
+
+    if (cluster.length === 1) {
+      offsets.set(markers[index].id, [0, 0]);
+      continue;
+    }
+
+    const sortedCluster = cluster.sort((first, second) => {
+      return markers[first].id.localeCompare(markers[second].id);
+    });
+
+    const baseRadius = 18;
+    const ringStep = 8;
+    const ringCapacity = 8;
+
+    sortedCluster.forEach((markerIndex, clusterIndex) => {
+      const ring = Math.floor(clusterIndex / ringCapacity);
+      const positionInRing = clusterIndex % ringCapacity;
+      const pointsInRing = Math.min(ringCapacity, sortedCluster.length - ring * ringCapacity);
+      const angle = (-Math.PI / 2) + (positionInRing / pointsInRing) * Math.PI * 2;
+      const radius = baseRadius + ring * ringStep;
+      const x = Math.round(Math.cos(angle) * radius);
+      const y = Math.round(Math.sin(angle) * radius);
+      offsets.set(markers[markerIndex].id, [x, y]);
+    });
+  }
+
+  return offsets;
+}
+
 export function MapCanvas({
   filters,
   facilities,
@@ -123,11 +289,13 @@ export function MapCanvas({
   onViewportChange,
   onFacilitySelect,
   agentMarkers,
+  extractedMapMarkers,
 }: MapCanvasProps) {
   const mapNodeRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const agentMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const extractedMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const focusMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const loadingPinMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const loadingLabelMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -221,14 +389,29 @@ export function MapCanvas({
 
     window.addEventListener('resize', handleWindowResize);
 
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            map.resize();
+            syncViewport();
+          })
+        : null;
+
+    if (resizeObserver && mapNodeRef.current) {
+      resizeObserver.observe(mapNodeRef.current);
+    }
+
     return () => {
       window.cancelAnimationFrame(firstResizeId);
       window.clearTimeout(secondResizeId);
       window.removeEventListener('resize', handleWindowResize);
+      resizeObserver?.disconnect();
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
       agentMarkersRef.current.forEach((marker) => marker.remove());
       agentMarkersRef.current = [];
+      extractedMarkersRef.current.forEach((marker) => marker.remove());
+      extractedMarkersRef.current = [];
       focusMarkerRef.current?.remove();
       focusMarkerRef.current = null;
       loadingPinMarkerRef.current?.remove();
@@ -306,6 +489,96 @@ export function MapCanvas({
       agentMarkersRef.current.push(marker);
     });
   }, [agentMarkers, onFacilitySelect]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    const renderExtractedMarkers = () => {
+      extractedMarkersRef.current.forEach((marker) => marker.remove());
+      extractedMarkersRef.current = [];
+
+      if (!extractedMapMarkers || extractedMapMarkers.length === 0) {
+        return;
+      }
+
+      const offsets = getExtractedMarkerOffsets(map, extractedMapMarkers);
+
+      extractedMapMarkers.forEach((facility) => {
+        const element = createExtractedMarkerElement(
+          facility.id === selectedFacilityId,
+          `${facility.name} extracted from response`,
+        );
+
+        element.addEventListener('click', () => {
+          onFacilitySelect(facility.id);
+        });
+
+        const marker = new mapboxgl.Marker({
+          element,
+          anchor: 'bottom',
+          offset: offsets.get(facility.id) ?? [0, 0],
+        })
+          .setLngLat([facility.longitude, facility.latitude])
+          .addTo(map);
+
+        extractedMarkersRef.current.push(marker);
+      });
+    };
+
+    renderExtractedMarkers();
+    map.on('moveend', renderExtractedMarkers);
+    map.on('zoomend', renderExtractedMarkers);
+
+    return () => {
+      map.off('moveend', renderExtractedMarkers);
+      map.off('zoomend', renderExtractedMarkers);
+      extractedMarkersRef.current.forEach((marker) => marker.remove());
+      extractedMarkersRef.current = [];
+    };
+  }, [extractedMapMarkers, onFacilitySelect, selectedFacilityId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || extractedMapMarkers.length === 0) {
+      return;
+    }
+
+    const validMarkers = extractedMapMarkers.filter(
+      (marker) => Number.isFinite(marker.latitude) && Number.isFinite(marker.longitude),
+    );
+
+    if (validMarkers.length === 0) {
+      return;
+    }
+
+    if (validMarkers.length === 1) {
+      map.flyTo({
+        center: [validMarkers[0].longitude, validMarkers[0].latitude],
+        zoom: 12.8,
+        essential: true,
+        speed: 0.85,
+      });
+      return;
+    }
+
+    const cluster = selectPrimaryExtractedCluster(validMarkers);
+    const bounds = new mapboxgl.LngLatBounds();
+    cluster.forEach((marker) => {
+      bounds.extend([marker.longitude, marker.latitude]);
+    });
+
+    map.fitBounds(bounds, {
+      padding:
+        window.innerWidth < 921
+          ? { top: 110, right: 56, bottom: 96, left: 56 }
+          : { top: 130, right: 110, bottom: 100, left: 110 },
+      duration: 950,
+      maxZoom: 12.8,
+    });
+  }, [extractedMapMarkers]);
 
   useEffect(() => {
     const map = mapRef.current;

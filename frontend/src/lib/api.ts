@@ -3,11 +3,13 @@ import axios from 'axios';
 import { API_BASE_URL, MAPBOX_TOKEN } from './env';
 import {
   bboxToPolygon,
+  normalizeExtractMapMarkersResponse,
   normalizeFacilityProfile,
   normalizeFacilitySummary,
 } from './format';
 import type {
   BoundingBox,
+  ExtractMapMarkersResponse,
   FacilityProfile,
   GeocodeResult,
   MapMetadata,
@@ -100,4 +102,12 @@ export async function invokeAgent(userMessage: string): Promise<AgentResponse> {
     messages: [{ role: 'user', content: userMessage }],
   });
   return response.data;
+}
+
+export async function extractMapMarkers(markdown: string): Promise<ExtractMapMarkersResponse> {
+  const response = await api.post<Record<string, unknown>>('/map/extract-map-markers', {
+    markdown,
+  });
+
+  return normalizeExtractMapMarkersResponse(response.data);
 }

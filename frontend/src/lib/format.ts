@@ -1,5 +1,7 @@
 import type {
   BoundingBox,
+  ExtractedMapMarker,
+  ExtractMapMarkersResponse,
   FacilityProfile,
   FacilitySummary,
   MapSearchPayload,
@@ -102,6 +104,58 @@ export function normalizeFacilityProfile(value: Record<string, unknown>): Facili
       typeof value.mission_statement === 'string' ? value.mission_statement : null,
     created_at: typeof value.created_at === 'string' ? value.created_at : null,
     updated_at: typeof value.updated_at === 'string' ? value.updated_at : null,
+  };
+}
+
+export function normalizeExtractedMapMarker(value: Record<string, unknown>): ExtractedMapMarker | null {
+  const id = typeof value.id === 'string' ? value.id : '';
+  const name = typeof value.name === 'string' ? value.name.trim() : '';
+  const latitude = parseNumber(value.latitude);
+  const longitude = parseNumber(value.longitude);
+
+  if (!id || !name || latitude === null || longitude === null) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    latitude,
+    longitude,
+  };
+}
+
+export function normalizeExtractMapMarkersResponse(
+  value: Record<string, unknown>,
+): ExtractMapMarkersResponse {
+  const rawMarkers = Array.isArray(value.map_markers) ? value.map_markers : [];
+  const seen = new Set<string>();
+  const map_markers = rawMarkers
+    .map((item) =>
+      item && typeof item === 'object'
+        ? normalizeExtractedMapMarker(item as Record<string, unknown>)
+        : null,
+    )
+    .filter((item): item is ExtractedMapMarker => Boolean(item))
+    .filter((item) => {
+      const key = `${item.name}|${item.latitude}|${item.longitude}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+  return {
+    map_markers,
+    extracted_names: Array.isArray(value.extracted_names)
+      ? value.extracted_names.filter((item): item is string => typeof item === 'string')
+      : [],
+    raw_sql_results: Array.isArray(value.raw_sql_results)
+      ? value.raw_sql_results.filter(
+          (item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'),
+        )
+      : [],
   };
 }
 
