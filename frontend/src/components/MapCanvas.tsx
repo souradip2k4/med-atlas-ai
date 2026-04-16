@@ -36,16 +36,25 @@ interface MapCanvasProps {
   extractedMapMarkers: ExtractedMapMarker[];
 }
 
+function createMarkerHoverLabel(label: string) {
+  return `<span class="marker-hover-label">${label}</span>`;
+}
+
 function createMarkerElement(active: boolean, label: string) {
   const element = document.createElement('button');
   element.type = 'button';
   element.className = active
-    ? 'facility-marker relative h-7 w-7 border-0 bg-transparent'
-    : 'facility-marker relative h-7 w-7 border-0 bg-transparent';
+    ? 'facility-marker facility-marker--active relative h-10 w-10 border-0 bg-transparent'
+    : 'facility-marker relative h-10 w-10 border-0 bg-transparent';
   element.setAttribute('aria-label', label);
-  element.innerHTML = active
-      ? '<span class="facility-marker__halo absolute inset-0 rounded-full bg-surface-teal"></span><span class="facility-marker__dot absolute inset-[3px] rounded-full border-[3px] border-white/95 bg-[linear-gradient(180deg,#4f8df7,#2d6ce6)] shadow-[0_10px_18px_rgba(15,97,82,0.25)]"></span>'
-    : '<span class="facility-marker__halo absolute inset-0 rounded-full bg-surface-teal"></span><span class="facility-marker__dot absolute inset-[5px] rounded-full border-[3px] border-white/95 bg-[linear-gradient(180deg,#22c7a7,#0d9f83)] shadow-[0_10px_18px_rgba(15,97,82,0.25)]"></span>';
+  element.innerHTML = `
+    <span class="facility-marker__halo absolute inset-0"></span>
+    <svg viewBox="0 0 24 24" fill="none" class="facility-marker__icon">
+      <path d="M12 21s-5.5-4.7-5.5-10a5.5 5.5 0 1 1 11 0c0 5.3-5.5 10-5.5 10Z" class="facility-marker__pin"/>
+      <circle cx="12" cy="10" r="3.1" class="facility-marker__inner"/>
+    </svg>
+    ${createMarkerHoverLabel(label)}
+  `;
   return element;
 }
 
@@ -54,8 +63,11 @@ function createAgentMarkerElement(label: string) {
   element.type = 'button';
   element.className = 'agent-marker relative h-7 w-7 border-0 bg-transparent';
   element.setAttribute('aria-label', label);
-  element.innerHTML =
-    '<span class="agent-marker__halo absolute inset-0 rounded-full"></span><span class="agent-marker__dot absolute inset-[3px] rounded-full"></span>';
+  element.innerHTML = `
+    <span class="agent-marker__halo absolute inset-0 rounded-full"></span>
+    <span class="agent-marker__dot absolute inset-[3px] rounded-full"></span>
+    ${createMarkerHoverLabel(label)}
+  `;
   return element;
 }
 
@@ -72,8 +84,29 @@ function createExtractedMarkerElement(active: boolean, label: string) {
       <circle cx="12" cy="10" r="3.2" class="extracted-marker__inner"/>
       <path d="m10.5 10 1.1 1.1 2-2.2" class="extracted-marker__check"/>
     </svg>
+    ${createMarkerHoverLabel(label)}
   `;
   return element;
+}
+
+function attachMarkerInteraction(
+  element: HTMLElement,
+  onSelect: () => void,
+) {
+  const handlePointerDown = (event: Event) => {
+    event.stopPropagation();
+  };
+
+  const handleClick = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect();
+  };
+
+  element.addEventListener('pointerdown', handlePointerDown);
+  element.addEventListener('mousedown', handlePointerDown);
+  element.addEventListener('touchstart', handlePointerDown, { passive: true });
+  element.addEventListener('click', handleClick);
 }
 
 function createFocusMarkerElement(label: string) {
@@ -444,7 +477,7 @@ export function MapCanvas({
           `${facility.facility_name} in ${facility.city ?? 'Ghana'}`,
         );
 
-        element.addEventListener('click', () => {
+        attachMarkerInteraction(element, () => {
           onFacilitySelect(facility.facility_id);
         });
 
@@ -475,9 +508,9 @@ export function MapCanvas({
     agentMarkers.forEach((facility) => {
       const element = createAgentMarkerElement(facility.facility_name);
 
-      element.addEventListener('click', () => {
-        onFacilitySelect(facility.facility_id);
-      });
+        attachMarkerInteraction(element, () => {
+          onFacilitySelect(facility.facility_id);
+        });
 
       const marker = new mapboxgl.Marker({
         element,
@@ -512,7 +545,7 @@ export function MapCanvas({
           `${facility.name} extracted from response`,
         );
 
-        element.addEventListener('click', () => {
+        attachMarkerInteraction(element, () => {
           onFacilitySelect(facility.id);
         });
 

@@ -57,7 +57,7 @@ export function ChatMappedFacilitiesView({
                 key={`${facility.id}-${facility.latitude}-${facility.longitude}`}
                 type="button"
                 onClick={() => handleFacilityClick(facility)}
-                className="group w-full rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-[var(--color-chat-citation-card)] p-3.5 text-left shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-[var(--color-chat-citation-card-hover)]"
+                className="group w-full rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-surface-panel p-3.5 text-left shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-surface-panel-soft/40"
               >
                 <div className="flex items-start gap-2">
                   <MapPin className="mt-0.5 size-3.5 shrink-0 text-accent-700 opacity-80" />

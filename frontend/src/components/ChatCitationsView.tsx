@@ -71,7 +71,7 @@ export function ChatCitationsView({ citations, onClose }: ChatCitationsViewProps
                   type="button"
                   onClick={() => source.facility_id && handleFacilityClick(source.facility_id)}
                   disabled={!source.facility_id}
-                  className="group w-full rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-[var(--color-chat-citation-card)] p-3.5 text-left shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-[var(--color-chat-citation-card-hover)] disabled:cursor-default disabled:hover:bg-[var(--color-chat-citation-card)]"
+                  className="group w-full rounded-[20px] border border-[var(--color-chat-citation-card-border)] bg-surface-panel p-3.5 text-left shadow-[var(--color-chat-citation-card-shadow)] transition-colors hover:bg-surface-panel-soft/40 disabled:cursor-default disabled:hover:bg-[var(--color-chat-citation-card)]"
                 >
                   <div className="flex items-start justify-between gap-2 mb-1.5">
                     {source.facility_name ? (
