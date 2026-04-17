@@ -4,6 +4,7 @@ preprocessor.py — Synthesise a single structured text block from a CSV row.
 
 import re
 import ast
+import json
 from typing import Dict, Any
 
 
@@ -78,27 +79,70 @@ def synthesize_row_text(row: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# ── Targeted synthesizers (Phase 2: reduced LLM scope) ───────────────────
+# Columns relevant to Step 1 (org classification) — REMOVED, org_type comes from CSV
 
-# Columns relevant to Step 1 (org classification)
-_ORG_CLASSIFICATION_COLS = {
-    "name", "description", "organization_type",
-}
-
-# Columns relevant to Step 2 (fact extraction + description generation)
+# Columns relevant to Step 2 (fact validation + name cleaning + description generation)
 _FACT_EXTRACTION_COLS = {
-    "name", "description",
+    "name", "name_variants", "description",
     "specialties", "procedure", "equipment", "capability",
 }
 
 
-def synthesize_for_org_classification(row: Dict[str, Any]) -> str:
-    """Build text from only the columns needed for org type classification."""
-    filtered = {k: v for k, v in row.items() if k.lower() in _ORG_CLASSIFICATION_COLS}
-    return synthesize_row_text(filtered)
+def synthesize_for_org_classification(_row: Dict[str, Any]) -> str:
+    """Legacy stub — Step 1 removed. Returns empty string."""
+    return ""
 
 
 def synthesize_for_fact_extraction(row: Dict[str, Any]) -> str:
-    """Build text from only the columns needed for fact/description extraction."""
-    filtered = {k: v for k, v in row.items() if k.lower() in _FACT_EXTRACTION_COLS}
-    return synthesize_row_text(filtered)
+    """Build the validation context text passed to the LLM.
+
+    Presents the pre-merged data in a structured way for the LLM to review
+    and clean — not to extract new facts.
+    """
+    lines: list[str] = []
+
+    # ── Name variants ──────────────────────────────────────────────────────
+    name_variants = row.get("name_variants") or []
+    if isinstance(name_variants, str):
+        try:
+            name_variants = json.loads(name_variants)
+        except (ValueError, TypeError):
+            name_variants = [name_variants]
+    if name_variants:
+        lines.append(f"Name Variants (pick and clean the most accurate): {', '.join(repr(n) for n in name_variants)}")
+    elif row.get("name"):
+        lines.append(f"Name: {row['name']}")
+
+    # ── Clinical arrays ────────────────────────────────────────────────────
+    for col, label in [
+        ("specialties", "Specialties"),
+        ("procedure", "Procedures"),
+        ("equipment", "Equipment"),
+        ("capability", "Capabilities"),
+    ]:
+        value = row.get(col)
+        str_val = str(value).strip() if value is not None else ""
+        if not str_val or str_val.lower() in ("null", "none", "[]", '""'):
+            lines.append(f"{label}: (none provided)")
+            continue
+        # Parse and render as bullet list
+        if str_val.startswith("[") and str_val.endswith("]"):
+            try:
+                parsed = ast.literal_eval(str_val)
+                if isinstance(parsed, list):
+                    valid_items = [_normalise(str(x)) for x in parsed if x and str(x).strip()]
+                    if valid_items:
+                        lines.append(f"{label}:\n" + "\n".join(f"  - {x}" for x in valid_items))
+                    else:
+                        lines.append(f"{label}: (none provided)")
+                    continue
+            except (ValueError, SyntaxError):
+                pass
+        lines.append(f"{label}: {_normalise(str_val)}")
+
+    # ── Description (for context only) ────────────────────────────────────
+    desc = row.get("description")
+    if desc and str(desc).strip() and str(desc).strip().lower() not in ("null", "none"):
+        lines.append(f"Existing Description: {_normalise(str(desc))}")
+
+    return "\n".join(lines)

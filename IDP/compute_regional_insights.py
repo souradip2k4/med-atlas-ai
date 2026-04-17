@@ -69,14 +69,12 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
         F.countDistinct("facility_id").alias("facility_count"),
         F.sum("capacity").alias("total_capacity"),
         F.sum("no_doctors").alias("total_doctors"),
-        F.collect_set("facility_id").alias("contributing_facility_ids"),
     )
     overview_df = overview_df.select(
         "country", "state", "city",
         F.lit("overview").alias("insight_category"),
         F.lit("all_facilities").alias("insight_value"),
         "facility_count", "total_capacity", "total_doctors",
-        "contributing_facility_ids",
     )
     insights_dfs.append(overview_df)
 
@@ -90,7 +88,6 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
             F.countDistinct("facility_id").alias("facility_count"),
             F.sum("capacity").alias("total_capacity"),
             F.sum("no_doctors").alias("total_doctors"),
-            F.collect_set("facility_id").alias("contributing_facility_ids"),
         )
     )
     operator_df = operator_df.select(
@@ -98,7 +95,6 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
         F.lit("operator").alias("insight_category"),
         F.col("operator_type").alias("insight_value"),
         "facility_count", "total_capacity", "total_doctors",
-        "contributing_facility_ids",
     )
     insights_dfs.append(operator_df)
 
@@ -112,7 +108,6 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
         )
         grouped = exploded.groupBy("country", "state", "city", "item").agg(
             F.countDistinct("facility_id").alias("facility_count"),
-            F.collect_set("facility_id").alias("contributing_facility_ids"),
         )
         return grouped.select(
             "country", "state", "city",
@@ -121,7 +116,6 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
             "facility_count",
             F.lit(None).cast(IntegerType()).alias("total_capacity"),
             F.lit(None).cast(IntegerType()).alias("total_doctors"),
-            "contributing_facility_ids",
         )
 
     # ── 3. SPECIALTIES ───────────────────────────────────────────────────────
@@ -144,7 +138,6 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
         "country", "state", "city",
         "insight_category", "insight_value",
         "facility_count", "total_capacity", "total_doctors",
-        "contributing_facility_ids",
     )
 
     logger.info("Writing regional_insights (full overwrite)...")

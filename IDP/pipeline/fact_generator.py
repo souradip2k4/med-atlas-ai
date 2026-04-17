@@ -25,14 +25,13 @@ _TEMPLATES = {
 
 
 def _make_fact(facility_id: str, fact_type: str,
-               fact_text: str, source_text: str) -> Dict[str, Any]:
+               fact_text: str) -> Dict[str, Any]:
     """Helper to build a single fact dict."""
     return {
         "fact_id": str(uuid.uuid4()),
         "facility_id": facility_id,
         "fact_text": fact_text,
         "fact_type": fact_type,
-        "source_text": source_text,
     }
 
 
@@ -95,7 +94,7 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
         
         facts.append(_make_fact(
             facility_id, fact_type,
-            fact_text, items_str,
+            fact_text,
         ))
 
     # ── Summary Fact (identity-focused: name + type + location + affiliation only) ──
@@ -104,10 +103,17 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
     # 1. Core identity sentence
     operator_type = facility_record.get("operator_type")
     facility_type = facility_record.get("facility_type")
+    org_type = facility_record.get("organization_type")
+    
     op_str = "privately operated " if operator_type == "private" else "publicly operated " if operator_type else ""
-    fac_str = facility_type if facility_type else "organization"
+    
+    # Combine facility_type and org_type seamlessly
+    if facility_type and org_type:
+        fac_str = f"{facility_type} ({org_type})"
+    else:
+        fac_str = facility_type or org_type or "organization"
 
-    # e.g. "Bromley Park Dental Clinic is a privately operated clinic in Accra, Greater Accra Region, Ghana."
+    # e.g. "Bromley Park Dental Clinic is a privately operated clinic (Health Facility) in Accra, Greater Accra Region, Ghana."
     summary_parts.append(f"{facility_name} is a {op_str}{fac_str}{loc_str}.")
 
     # 2. Affiliation sentence
@@ -119,7 +125,7 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
         summary_text = " ".join(summary_parts)
         facts.append(_make_fact(
             facility_id, "summary",
-            summary_text, summary_text
+            summary_text
         ))
 
     # ── Description Fact (new) ────────────────────────────────────────────────
@@ -142,7 +148,7 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
         desc_text = f"{facility_name}{loc_str}: {desc_body}"
         facts.append(_make_fact(
             facility_id, "description",
-            desc_text, desc_body
+            desc_text
         ))
 
     if not facts:

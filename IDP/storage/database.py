@@ -21,7 +21,7 @@ class DatabricksDatabase:
     def __init__(self):
         self.host = os.getenv("DATABRICKS_HOST")
         self.token = os.getenv("DATABRICKS_TOKEN")
-        self.catalog = os.getenv("CATALOG", "med_atlas_ai")
+        self.catalog = os.getenv("CATALOG")
         self.schema = os.getenv("SCHEMA", "default")
         self._spark = None
 

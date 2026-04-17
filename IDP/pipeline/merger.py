@@ -391,38 +391,38 @@ def merge_extraction_results(
     dict
         A single record ready for insertion into ``facility_records``.
     """
-    org = extraction.get("org_output")
+    org = extraction.get("org_output")  # Always None now (Step 1 removed)
     facts = extraction.get("facts_output")
-    specs = extraction.get("specialties_output")
-    fac = extraction.get("facility_output")
+    specs = extraction.get("specialties_output")  # Always None (CSV used directly)
+    fac = extraction.get("facility_output")        # Always None (CSV used directly)
 
-    facility_name = extraction.get("facility_name") or row.get("name") or "Unknown"
+    # facility_name: prefer LLM-cleaned name, then row primary (shortest variant from deduplicator)
+    facility_name = (
+        (facts.cleaned_name.strip() if facts and facts.cleaned_name else None)
+        or extraction.get("facility_name")
+        or row.get("name")
+        or "Unknown"
+    )
     source_row_id = extraction.get("source_row_id", "")
     now = datetime.now(timezone.utc)
 
-    # ── Determine organization_type ──
-    org_type = _first_non_null(
-        row.get("organization_type"),
-        "facility",  # fallback
-    )
+    # ── Determine organization_type — directly from CSV (Step 1 removed) ──
+    org_type = row.get("organization_type") or None
 
-    # ── Merge medical arrays and enforce Python garbage filtering ──
-    specialties = _clean_array(_merge_arrays(
-        specs.specialties if specs else None,
-        _parse_csv_array(row.get("specialties")),
-    ))
-    procedures = _clean_array(_merge_arrays(
-        facts.procedure if facts else None,
-        _parse_csv_array(row.get("procedure")),
-    ))
-    equipment = _clean_array(_merge_arrays(
-        facts.equipment if facts else None,
-        _parse_csv_array(row.get("equipment")),
-    ))
-    capabilities = _clean_array(_merge_arrays(
-        facts.capability if facts else None,
-        _parse_csv_array(row.get("capability")),
-    ))
+    # ── Medical arrays: use LLM-validated output directly (no re-merge with CSV) ──
+    # The LLM has already cleaned the pre-merged arrays. _clean_array acts as safety net.
+    specialties = _clean_array(
+        facts.specialties if facts else None
+    ) or _parse_csv_array(row.get("specialties")) or None
+    procedures = _clean_array(
+        facts.procedure if facts else None
+    ) or _parse_csv_array(row.get("procedure")) or None
+    equipment = _clean_array(
+        facts.equipment if facts else None
+    ) or _parse_csv_array(row.get("equipment")) or None
+    capabilities = _clean_array(
+        facts.capability if facts else None
+    ) or _parse_csv_array(row.get("capability")) or None
 
     # ── Location from Facility extraction (fallback to CSV) ──
     address_line1 = _first_non_null(
@@ -493,19 +493,19 @@ def merge_extraction_results(
         _try_bool(row.get("acceptsvolunteers")),
     )
     capacity = _first_non_null(
-        getattr(facts, "capacity", None) if facts else None,          # Step 2 LLM (primary)
+        _try_int(row.get("capacity")),                                 # CSV column (primary)
+        getattr(facts, "capacity", None) if facts else None,           # Step 2 LLM (secondary)
         fac.capacity if fac else None,                                 # Step 4 legacy (now None)
-        _try_int(row.get("capacity")),  # CSV column still named 'capacity'
     )
 
     # ── Regex fallback: recover bed counts from free-text ──
     if capacity is None:
         capacity = _extract_bed_count([capabilities, equipment])
 
-    # ── Doctor count: LLM primary → CSV secondary → free-text fallback ──
+    # ── Doctor count: CSV primary → LLM secondary → free-text fallback ──
     no_doctors = _first_non_null(
-        getattr(facts, "noDocors", None) if facts else None,   # Step 2 LLM (primary)
-        _try_int(row.get("numberdoctors")),                     # CSV column (secondary)
+        _try_int(row.get("numberdoctors")),                            # CSV column (primary)
+        getattr(facts, "noDocors", None) if facts else None,           # Step 2 LLM (secondary)
     )
     if no_doctors is None:
         no_doctors = _extract_doctor_count([procedures, capabilities])

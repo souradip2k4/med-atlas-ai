@@ -83,7 +83,6 @@ FACILITY_FACTS_SCHEMA = StructType([
     StructField("facility_id", StringType(), nullable=False),
     StructField("fact_text", StringType(), nullable=False),
     StructField("fact_type", StringType(), nullable=False),
-    StructField("source_text", StringType(), nullable=True),
 ])
 
 # ---------------------------------------------------------------------------
@@ -98,5 +97,4 @@ REGIONAL_INSIGHTS_SCHEMA = StructType([
     StructField("facility_count", IntegerType(), nullable=True),
     StructField("total_capacity", IntegerType(), nullable=True),
     StructField("total_doctors", IntegerType(), nullable=True),
-    StructField("contributing_facility_ids", ArrayType(StringType()), nullable=True),
 ])

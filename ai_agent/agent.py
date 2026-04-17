@@ -64,9 +64,9 @@ from databricks_langchain import ChatDatabricks
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 LLM_ENDPOINT  = os.environ["LLM_ENDPOINT"]
-VS_INDEX     = os.environ.get("VS_INDEX", "med_atlas_ai.default.facility_facts_index")
+VS_INDEX     = os.environ.get("VS_INDEX")
 GENIE_ID     = os.environ["GENIE_SPACE_ID"]
-CATALOG      = os.environ.get("CATALOG", "med_atlas_ai")
+CATALOG      = os.environ.get("CATALOG")
 SCHEMA       = os.environ.get("SCHEMA", "default")
 
 

@@ -8,7 +8,7 @@ Run locally:
 """
 
 # Re-export the FastAPI app so `uvicorn ai_agent.server:app` continues to work
-from ai_agent.api.main import app
+from ai_agent.api.main import app  # noqa: F401
 
 if __name__ == "__main__":
     import uvicorn

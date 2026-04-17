@@ -34,7 +34,7 @@ def main() -> None:
     db.create_table_if_not_exists("facility_facts", FACILITY_FACTS_SCHEMA)
     
     if not db._table_exists("facility_records"):
-        logger.error("facility_records table does not exist. Please run main.py first.")
+        logger.error("facility_records table does not exist. Please run facility_record_generator.py.py first.")
         return
         
     logger.info("═══ Stage 2: Reading existing data ═══")
@@ -55,27 +55,7 @@ def main() -> None:
         if r["facility_id"] not in processed_ids:
             pending_records.append(r)
             
-    # Checkpoint functionality mapping across scripts
-    max_process_rows = os.getenv("MAX_PROCESS_ROWS")
-    if max_process_rows:
-        try:
-            limit = min(int(max_process_rows), 987)
-            if len(processed_ids) >= limit:
-                logger.info(
-                    "═══ MAX_PROCESS_ROWS=%d reached (%d facilities already in facility_facts). "
-                    "Nothing to do. ═══",
-                    limit, len(processed_ids),
-                )
-                _print_summary(db)
-                return
-            remaining = limit - len(processed_ids)
-            pending_records = pending_records[:remaining]
-            logger.info(
-                "MAX_PROCESS_ROWS=%d, already processed facilities=%d, will process %d more facilities.",
-                limit, len(processed_ids), len(pending_records),
-            )
-        except ValueError:
-            logger.warning("MAX_PROCESS_ROWS is not a valid integer. Processing all pending records.")
+
 
     total_rows = len(pending_records)
     logger.info("Pending facility records to process for facts: %d", total_rows)

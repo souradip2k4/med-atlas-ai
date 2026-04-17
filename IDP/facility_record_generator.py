@@ -26,6 +26,7 @@ from storage.models import (
     FACILITY_RECORDS_SCHEMA,
 )
 from pipeline.loader import load_csv_data
+from pipeline.deduplicator import deduplicate_rows
 from pipeline.extractor import LLMExtractor
 from pipeline.merger import merge_extraction_results
 
@@ -53,6 +54,11 @@ def main() -> None:
     logger.info("═══ Stage 2: Loading CSV ═══")
     rows = load_csv_data()
 
+    # ── 2b. Deduplication ────────────────────────────────────────────
+    logger.info("═══ Stage 2b: Deduplicating rows by pk_unique_id ═══")
+    rows = deduplicate_rows(rows)
+    logger.info("Processing %d unique facilities.", len(rows))
+
     # ── 3 & 4. Extraction + Merge (parallel) ────────────────────────
     max_workers = int(os.getenv("MAX_WORKERS", "4"))
     logger.info("═══ Stage 3-4: Identify pending rows for extraction ═══")
@@ -67,36 +73,15 @@ def main() -> None:
         except Exception as e:
             logger.warning("Could not read existing facility_records for checkpointing: %s", e)
 
-    pending_rows = []
-    for r in rows:
-        row_id = str(r.get("unique_id") or r.get("pk_unique_id") or "")
-        if row_id not in processed_ids:
-            pending_rows.append(r)
-            
-    rows = pending_rows
+    # Filter out already processed records
+    rows = [r for r in rows if str(r.get("unique_id") or r.get("pk_unique_id") or "") not in processed_ids]
 
     max_process_rows = os.getenv("MAX_PROCESS_ROWS")
-    max_process_rows = min(int(max_process_rows), 987)
-    print("max_process_rows = ", max_process_rows)
-    limit = None
     if max_process_rows:
         try:
             limit = int(max_process_rows)
-            if len(processed_ids) >= limit:
-                logger.info(
-                    "\u2550\u2550\u2550 MAX_PROCESS_ROWS=%d reached (%d rows already in facility_records). "
-                    "Nothing to do. \u2550\u2550\u2550",
-                    limit, len(processed_ids),
-                )
-                _print_summary(db)
-                return
-            # Cap pending rows to the remaining budget
-            remaining = limit - len(processed_ids)
-            rows = rows[:remaining]
-            logger.info(
-                "MAX_PROCESS_ROWS=%d, already processed=%d, will process %d more rows.",
-                limit, len(processed_ids), len(rows),
-            )
+            rows = rows[:limit]
+            logger.info("MAX_PROCESS_ROWS=%d. Will process up to %d unique facilities in this run.", limit, limit)
         except ValueError:
             logger.warning("MAX_PROCESS_ROWS is not a valid integer. Processing all pending rows.")
 
