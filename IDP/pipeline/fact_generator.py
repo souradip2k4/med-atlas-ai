@@ -98,67 +98,51 @@ def generate_facts(facility_record: Dict[str, Any]) -> List[Dict[str, Any]]:
             fact_text, items_str,
         ))
 
-    # ── Summary Field (Replaces all individual scalar fields) ────────────────────────────
-    
+    # ── Summary Fact (identity-focused: name + type + location + affiliation only) ──
     summary_parts = []
-    
-    # 1. Organization & Location
+
+    # 1. Core identity sentence
     operator_type = facility_record.get("operator_type")
     facility_type = facility_record.get("facility_type")
-    
     op_str = "privately operated " if operator_type == "private" else "publicly operated " if operator_type else ""
     fac_str = facility_type if facility_type else "organization"
-    
-    # "WAAF is a privately operated clinic in Accra, Ghana."
+
+    # e.g. "Bromley Park Dental Clinic is a privately operated clinic in Accra, Greater Accra Region, Ghana."
     summary_parts.append(f"{facility_name} is a {op_str}{fac_str}{loc_str}.")
-    
-    # 2. Add Physical Address
-    address_line1 = facility_record.get("address_line1")
-    address_line2 = facility_record.get("address_line2")
-    address_line3 = facility_record.get("address_line3")
 
-    addr_parts = []
-    if address_line1: addr_parts.append(address_line1.strip())
-    if address_line2: addr_parts.append(address_line2.strip())
-    if address_line3: addr_parts.append(address_line3.strip())
-
-    if addr_parts:
-        full_street_address = ", ".join(addr_parts)
-        summary_parts.append(f"It is physically located at {full_street_address}.")
-    
-    # 3. Add Hard Metrics
-    capacity = facility_record.get("capacity")
-    if capacity:
-        summary_parts.append(f"It has an inpatient capacity of {capacity} beds.")
-        
-    # 4. History and Operations
-    year_established = facility_record.get("year_established")
-    if year_established:
-        summary_parts.append(f"Established in {year_established}.")
-        
-    accepts_volunteers = facility_record.get("accepts_volunteers")
-    if accepts_volunteers is True:
-        summary_parts.append("It actively accepts clinical volunteers.")
-        
-    # 5. Affiliations
+    # 2. Affiliation sentence
     affiliations = facility_record.get("affiliation_types")
     if affiliations:
         summary_parts.append(f"It is affiliated with the following types: {', '.join(affiliations)}.")
-        
-    # 6. Mission and Description
-    mission = facility_record.get("mission_statement")
-    desc = facility_record.get("description")
-    if mission:
-        summary_parts.append(f"Its mission statement is: {mission}")
-    if desc:
-        summary_parts.append(f"Description: {desc}")
-        
-    # Combine into exactly 1 summary fact
+
     if summary_parts:
         summary_text = " ".join(summary_parts)
         facts.append(_make_fact(
             facility_id, "summary",
             summary_text, summary_text
+        ))
+
+    # ── Description Fact (new) ────────────────────────────────────────────────
+    # Combines description + mission_statement with facility_name + location prefix.
+    # No fact row is created at all if both fields are null/empty.
+    desc_val = facility_record.get("description")
+    mission_val = facility_record.get("mission_statement")
+
+    if desc_val and mission_val:
+        desc_body = f"{desc_val} Its mission is: {mission_val}"
+    elif desc_val:
+        desc_body = desc_val
+    elif mission_val:
+        desc_body = f"Its mission is: {mission_val}"
+    else:
+        desc_body = None
+
+    if desc_body:
+        # Prefix with facility_name + location, consistent with all other fact_types
+        desc_text = f"{facility_name}{loc_str}: {desc_body}"
+        facts.append(_make_fact(
+            facility_id, "description",
+            desc_text, desc_body
         ))
 
     if not facts:

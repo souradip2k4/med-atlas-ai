@@ -157,8 +157,22 @@ class LLMExtractor:
 
     # ── Step 2: Facility fact extraction ─────────────────────────────
 
-    def extract_facility_facts(self, text: str, facility_name: str) -> Optional[FacilityFacts]:
-        prompt = FREE_FORM_SYSTEM_PROMPT.replace("{organization}", facility_name)
+    def extract_facility_facts(
+        self, text: str, facility_name: str, existing_description: str | None = None
+    ) -> Optional[FacilityFacts]:
+        # If the CSV already has a description, instruct the LLM to skip generation
+        if existing_description and existing_description.strip():
+            desc_note = (
+                "- IMPORTANT: A description already exists for this facility and does NOT need to be generated. "
+                "You MUST return `null` for the description field. Do not attempt to rephrase or improve it."
+            )
+        else:
+            desc_note = ""
+        prompt = (
+            FREE_FORM_SYSTEM_PROMPT
+            .replace("{organization}", facility_name)
+            .replace("{existing_description_note}", desc_note)
+        )
         raw = self._call_llm(prompt, text)
         return self._parse(FacilityFacts, raw)
 
@@ -205,9 +219,10 @@ class LLMExtractor:
         if not facility_name:
             facility_name = row.get("name") or "Unknown Facility"
 
-        # Step 2 — Fact extraction + description (targeted text)
+        # Step 2 — Fact extraction + description (LLM skips description if CSV already has one)
         fact_text = synthesize_for_fact_extraction(row)
-        facts_output = self.extract_facility_facts(fact_text, facility_name)
+        existing_description = row.get("description") or None
+        facts_output = self.extract_facility_facts(fact_text, facility_name, existing_description)
 
         # Steps 3 & 4 SKIPPED — CSV data used directly in merger.py
 

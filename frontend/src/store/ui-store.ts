@@ -20,6 +20,23 @@ const DEFAULT_FILTERS: SearchFilters = {
   affiliationTypes: [],
 };
 
+function sanitizePersistedChatEntries(chatEntries: ChatEntry[]) {
+  return chatEntries.map((entry) => {
+    if (!entry.isLoading && entry.extractedMapMarkersStatus !== 'loading') {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      isLoading: false,
+      extractedMapMarkersStatus:
+        entry.extractedMapMarkersStatus === 'loading' ? 'idle' : entry.extractedMapMarkersStatus,
+      extractedMapMarkersError:
+        entry.extractedMapMarkersStatus === 'loading' ? null : entry.extractedMapMarkersError,
+    };
+  });
+}
+
 interface UIState {
   activeDropdown: DropdownKey;
   advancedOpen: boolean;
@@ -216,7 +233,37 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         filters: state.filters,
         themePreference: state.themePreference,
+        chatOpen: state.chatOpen,
+        chatEntries: state.chatEntries,
+        viewingCitationsId: state.viewingCitationsId,
+        viewingMappedFacilitiesId: state.viewingMappedFacilitiesId,
+        agentMarkers: state.agentMarkers,
+        extractedMapMarkers: state.extractedMapMarkers,
+        activeExtractedMapEntryId: state.activeExtractedMapEntryId,
       }),
+      merge: (persistedState, currentState) => {
+        const typedPersistedState = persistedState as Partial<UIState> | undefined;
+
+        if (!typedPersistedState) {
+          return currentState;
+        }
+
+        return {
+          ...currentState,
+          ...typedPersistedState,
+          chatEntries: sanitizePersistedChatEntries(
+            typedPersistedState.chatEntries ?? currentState.chatEntries,
+          ),
+          viewingCitationsId: typedPersistedState.viewingCitationsId ?? null,
+          viewingMappedFacilitiesId: typedPersistedState.viewingMappedFacilitiesId ?? null,
+          agentMarkers: typedPersistedState.agentMarkers ?? currentState.agentMarkers,
+          extractedMapMarkers:
+            typedPersistedState.extractedMapMarkers ?? currentState.extractedMapMarkers,
+          activeExtractedMapEntryId:
+            typedPersistedState.activeExtractedMapEntryId ?? currentState.activeExtractedMapEntryId,
+          chatOpen: typedPersistedState.chatOpen ?? currentState.chatOpen,
+        };
+      },
     },
   ),
 );

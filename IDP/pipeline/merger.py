@@ -355,6 +355,22 @@ def _infer_ghana_region(city: Optional[str]) -> Optional[str]:
     return None
 
 
+def _clean_array(arr):
+    """Delete junk location/contact/directory strings from medical arrays."""
+    if not arr:
+        return []
+    junk_killers = [
+        "located in", "located at", "located on", "location:",
+        "phone:", "email:", "website:", "contact number", "opening hours", "always open",
+        "facebook", "followers", "likes,", "listed in", "registered with",
+        "ghanayello", "ghanabusinessweb", "page created", "unofficial page", "phone number",
+    ]
+    return [
+        item for item in arr
+        if not any(junk in item.lower() for junk in junk_killers)
+    ]
+
+
 def merge_extraction_results(
     extraction: Dict[str, Any],
     row: Dict[str, Any],
@@ -390,23 +406,23 @@ def merge_extraction_results(
         "facility",  # fallback
     )
 
-    # ── Merge medical arrays ──
-    specialties = _merge_arrays(
+    # ── Merge medical arrays and enforce Python garbage filtering ──
+    specialties = _clean_array(_merge_arrays(
         specs.specialties if specs else None,
         _parse_csv_array(row.get("specialties")),
-    )
-    procedures = _merge_arrays(
+    ))
+    procedures = _clean_array(_merge_arrays(
         facts.procedure if facts else None,
         _parse_csv_array(row.get("procedure")),
-    )
-    equipment = _merge_arrays(
+    ))
+    equipment = _clean_array(_merge_arrays(
         facts.equipment if facts else None,
         _parse_csv_array(row.get("equipment")),
-    )
-    capabilities = _merge_arrays(
+    ))
+    capabilities = _clean_array(_merge_arrays(
         facts.capability if facts else None,
         _parse_csv_array(row.get("capability")),
-    )
+    ))
 
     # ── Location from Facility extraction (fallback to CSV) ──
     address_line1 = _first_non_null(
@@ -496,14 +512,14 @@ def merge_extraction_results(
 
     # ── Text & Affiliations ──
     desc = _first_non_null(
-        getattr(facts, "description", None) if facts else None,  # Step 2 LLM-generated
-        getattr(fac, "description", None) if fac else None,      # Step 4 (legacy, now None)
+        row.get("description"),                                  # CSV original (primary — preserve as-is)
+        getattr(facts, "description", None) if facts else None,  # Step 2 LLM-generated (fallback for null CSV rows)
         getattr(org, "organizationDescription", None) if org else None,
-        row.get("description")
+        getattr(fac, "description", None) if fac else None,      # Step 4 (legacy, now None)
     )
     mission_statement = _first_non_null(
+        row.get("missionstatement"),                             # CSV original
         getattr(org, "missionStatement", None) if org else None,
-        row.get("missionstatement")
     )
     affiliation_types = _merge_arrays(
         getattr(fac, "affiliationTypeIds", None) if fac else None,

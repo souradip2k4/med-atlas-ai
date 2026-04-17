@@ -63,8 +63,9 @@ CRITICAL REQUIREMENTS
 DESCRIPTION GENERATION
 - In addition to the fact categories above, generate a `description` field.
 - This should be a concise 1-3 sentence summary of the facility's services, capabilities, and/or history.
-- Base it only on the provided content. If no meaningful description can be generated, set it to null.
+- Base it ONLY on the provided content. If the content lacks sufficient specific details about clinical services, equipment, or capabilities, you MUST return `null` for the description field. Do NOT generate generic or vague statements such as "A healthcare facility providing medical services to the community."
 - Do NOT duplicate information from the fact arrays — the description should be a human-readable overview.
+{existing_description_note}
 
 NUMERIC EXTRACTION (capacity, noDocors)
 - Scan ALL input fields — especially capability, equipment, description, and procedure — for any mention of:
