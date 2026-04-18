@@ -23,6 +23,7 @@ ARRAY VALIDATION RULES (applies to procedure, equipment, capability)
 For each array, review every item and REMOVE items that do not belong in that category.
 Return ONLY the items that are valid. If all items in an array are invalid, return `null`.
 DO NOT add new items that were not in the original array.
+COPY VALID ITEMS VERBATIM: When keeping a valid item, copy its text EXACTLY as it appears in the input. Do not rephrase, summarize, shorten, expand, or alter the wording in any way.
 
 - **specialties**
   - These are camelCase enum values (e.g., "internalMedicine", "cardiology").
@@ -58,20 +59,31 @@ DO NOT add new items that were not in the original array.
 
 
 - **capability**
-  - Valid items: clinical capability statements — emergency care levels, accreditation status, specialized units (ICU/NICU/burn unit), clinical programs, bed/staffing capacity, diagnostic capabilities, insurance acceptance, 24/7 service availability.
-  - REMOVE items that are: physical addresses, phone numbers, email addresses, social media links/statistics (Facebook likes/followers), business directory listings (GhanaYello, GhanaBusinessWeb), opening hours, promotional offers, and any item that describes WHERE the facility is rather than WHAT it can do clinically.
-  - Examples of INVALID capability items:
-    - "Located in Dansoman, Accra, Ghana" → REMOVE (address)
-    - "Phone number +233 53 109 9901" → REMOVE (contact)
-    - "Facebook page with 577 likes and 589 followers" → REMOVE (social media stats)
-    - "Listed as a related place on GhanaBusinessWeb" → REMOVE (directory listing)
-    - "Currently marked as Closed now" → REMOVE (not a clinical capability)
-    - "April 2023: Easter discount bonanza offered 80% discount" → REMOVE (promotional)
-  - Examples of VALID capability items:
-    - "24/7 emergency department" → KEEP
-    - "NHIS accreditation" → KEEP
-    - "Has 120-bed capacity general hospital" → KEEP
-    - "Private insurance accepted: GLICO, Nationwide, Phoenix" → KEEP
+  THE PRIMARY GATE TEST — apply this to every single item before anything else:
+  Ask yourself: "Does this item tell a patient or clinician something meaningful about WHAT this facility can DO medically or clinically?"
+  - If YES → candidate to keep (then also check the blocklist below).
+  - If NO, or if you are uncertain → REMOVE it. Do not keep items just because they sound medical-adjacent.
+  This test must be applied with your own judgment. Unknown garbage patterns not listed here must also be removed if they fail this test.
+
+  VALID capability items (examples that PASS the gate test — this list is NOT exhaustive):
+  - Emergency care: "24/7 emergency department", "Level 2 trauma centre"
+  - Accreditation: "NHIS accredited", "ISO 9001 certified"
+  - Specialized units: "Dialysis Centre on site", "NICU", "Burns unit"
+  - Bed/staffing capacity: "120-bed capacity", "Has 12 consulting rooms"
+  - Insurance acceptance: "Accepts GLICO, Star, ACE Medical insurance"
+  - Diagnostic capabilities: "24/7 laboratory", "On-site radiology"
+  - Clinical programs: "Child welfare clinic", "Antenatal care program"
+  If you encounter a capability item that passes the gate test but does not fit any of the categories above, use your own clinical judgment — keep it if it meaningfully describes what the facility can do medically.
+
+  ZERO-TOLERANCE BLOCKLIST — ALWAYS remove items matching ANY of these, no exceptions:
+  - Location descriptions: "Located in …", "Situated at …", "Has a location at …", "Primary location: …", "Headquarters: …"
+  - Contact info: "Phone: …", "Email: …", "Website: …", "Contact: …"
+  - Social media metadata: "Page created on …", "Is an unofficial page …", "Is categorized as … on Facebook", "X likes", "X followers", "X check-ins"
+  - Directory listings: "Listed in GhanaYello", "Registered with GhanaBusinessWeb", "Listed as a related place on …", "Listed in categories: …"
+  - Structured metadata fields: "Organization name: …", "City: …", "Country: …", "Street address: …", "Last updated: …", "Company size: …", "Type: …", "Industry: …"
+  - Mission/Vision/marketing: "Mission: …", "Vision: …", "Quality care in a supportive environment"
+  - Standalone opening hours: "Always open", "Open 24 hours" (valid ONLY if tied to a clinical service, e.g. "24/7 emergency department")
+  - Promotional / review content: "Easter discount …", "0 reviews", "X reviews"
 
 DESCRIPTION GENERATION
 - Generate a `description` field ONLY if the input data contains sufficient specific clinical details.
@@ -88,6 +100,8 @@ NUMERIC EXTRACTION (capacity, noDocors)
 - If no numeric evidence is found, set to null.
 
 CRITICAL RULES
+- DEFAULT TO REMOVAL: When in doubt about any item in any array, REMOVE it. It is better to store null than to keep garbage data.
+- VERBATIM ONLY: Never rephrase, paraphrase, or reword any kept array item. Copy valid items letter-for-letter from the input.
 - DO NOT invent or add any new items to any array.
 - If all items in an array are invalid, return `null` for that array (not an empty array []).
 - Return only valid JSON matching the output schema.

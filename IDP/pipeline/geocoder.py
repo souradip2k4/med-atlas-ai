@@ -19,10 +19,12 @@ from typing import Optional
 
 import requests
 from requests.exceptions import Timeout, ConnectionError as ReqConnectionError
+import threading
 
 logger = logging.getLogger(__name__)
 
 _LOCATIONIQ_URL = "https://us1.locationiq.com/v1/search"
+_API_LOCK = threading.Lock()
 
 
 class FacilityGeocoder:
@@ -69,8 +71,6 @@ class FacilityGeocoder:
         result: dict = {
             "latitude": None,
             "longitude": None,
-            "resolved_city": None,
-            "resolved_state": None,
         }
 
         country = (country or "Ghana").strip()
@@ -78,9 +78,8 @@ class FacilityGeocoder:
         facility_label = name or city or "unknown facility"
         attempted: list[str] = []
 
-        for query, extract_location in queries:
+        for query in queries:
             attempted.append(query)
-            logger.info("[Geocode] Trying: '%s'", query)
             loc = self._call_api_with_retry(query)
             if loc is None:
                 logger.warning(
@@ -91,27 +90,6 @@ class FacilityGeocoder:
 
             result["latitude"] = float(loc["lat"])
             result["longitude"] = float(loc["lon"])
-
-            # Backfill city/state from the API's address component
-            if extract_location:
-                addr = loc.get("address", {})
-                if not city:
-                    result["resolved_city"] = (
-                        addr.get("city")
-                        or addr.get("town")
-                        or addr.get("village")
-                        or addr.get("suburb")
-                    )
-                if not state:
-                    result["resolved_state"] = addr.get("state")
-
-            # logger.info(
-            #     "[Geocode] ✔ '%s' → (%.5f, %.5f) via query '%s'",
-            #     facility_label,
-            #     result["latitude"],
-            #     result["longitude"],
-            #     query,
-            # )
             return result
 
         logger.warning(
@@ -131,28 +109,28 @@ class FacilityGeocoder:
         city: Optional[str],
         state: Optional[str],
         country: str,
-    ) -> list[tuple[str, bool]]:
-        """Return ordered list of (query_string, extract_location_from_response)."""
-        queries: list[tuple[str, bool]] = []
+    ) -> list[str]:
+        """Return ordered list of query strings to try."""
+        queries: list[str] = []
         n = (name or "").strip()
         c = (city or "").strip()
         s = (state or "").strip()
 
         # 1. Full: name + city + state + country (most specific)
         if n and c and s:
-            queries.append((f"{n}, {c}, {s}, {country}", False))
+            queries.append(f"{n}, {c}, {s}, {country}")
 
         # 2. No name: city + state + country
         if c and s:
-            queries.append((f"{c}, {s}, {country}", False))
+            queries.append(f"{c}, {s}, {country}")
 
-        # 3. No state: city + country — extract state from response
+        # 3. No state: city + country
         if c:
-            queries.append((f"{c}, {country}", not bool(s)))
+            queries.append(f"{c}, {country}")
 
-        # 4. No city/state: name + country — extract city + state from response
+        # 4. No city/state: name + country
         if n and not c:
-            queries.append((f"{n}, {country}", True))
+            queries.append(f"{n}, {country}")
 
         return queries
 
@@ -163,16 +141,17 @@ class FacilityGeocoder:
             "q": query,
             "format": "json",
             "limit": 1,
-            "addressdetails": 1,
             "countrycodes": "gh",   # restrict to Ghana
         }
 
         for attempt in range(2):
             try:
-                time.sleep(self._RATE_DELAY)
-                response = requests.get(
-                    _LOCATIONIQ_URL, params=params, timeout=10
-                )
+                with _API_LOCK:
+                    time.sleep(self._RATE_DELAY)
+                    response = requests.get(
+                        _LOCATIONIQ_URL, params=params, timeout=10
+                    )
+
                 if response.status_code == 200:
                     data = response.json()
                     if data:

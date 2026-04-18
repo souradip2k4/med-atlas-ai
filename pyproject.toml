@@ -19,6 +19,7 @@ dependencies = [
     "uvicorn>=0.30.0",
     "mlflow==3.10.1",
     "geopy>=2.4.1",
+    "google-generativeai>=0.8.6",
 ]
 
 [tool.ruff]

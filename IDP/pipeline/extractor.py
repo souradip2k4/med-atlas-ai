@@ -64,6 +64,70 @@ def _strip_markdown_json(text: str | list) -> str:
     return text.strip()
 
 
+
+# ── Deterministic post-processing ────────────────────────────────────────────
+# The LLM is asked to remove garbage in its prompt, but open-source models
+# don't always comply. This Python filter runs AFTER the LLM as a safety net.
+
+_GARBAGE_KEYWORDS: tuple[str, ...] = (
+    "follower",
+    "like",
+    "facebook",
+    "website",
+    "twitter",
+    "instagram",
+    "linkedin",
+    "location",
+    "phone",
+    "email",
+    "located",
+    "located at"
+    "page created",
+    "page",
+    "closed",
+    "price",
+    "city",
+    "country",
+    "region",
+    "updated",
+    "company",
+    "abbreviation",
+    "review",
+    "people",
+    "unofficial",
+    "found at",
+    "industry",
+    "discount"
+    )
+
+
+def _is_garbage_item(item: str) -> bool:
+    """Return True if a capability item contains any garbage keyword via fuzzy matching."""
+    lower = item.strip().lower()
+    # Fuzzy match: checks if any kw is a substring of the lowercased sentence
+    # This automatically matches plurals like "followers" (contains "follower")
+    # or "likes" (contains "like").
+    for kw in _GARBAGE_KEYWORDS:
+        if kw in lower:
+            return True
+    return False
+
+
+def _clean_array(arr: list | None) -> list | None:
+    """Filter garbage items, returning None if nothing valid survives."""
+    if not arr:
+        return None
+    cleaned = [item for item in arr if not _is_garbage_item(item)]
+    return cleaned if cleaned else None
+
+
+def _postprocess_facts(facts: "FacilityFacts") -> "FacilityFacts":
+    """Apply deterministic garbage removal to LLM output (capability only)."""
+    facts.capability = _clean_array(facts.capability)
+    return facts
+
+
+
 class LLMExtractor:
     """
     Runs a single LLM validation pass against each consolidated facility row.
@@ -81,7 +145,7 @@ class LLMExtractor:
         )
         self.llm = ChatDatabricks(
             endpoint=self.endpoint,
-            temperature=0.2,
+            temperature=0.4,
             max_tokens=4096,
         )
 
@@ -142,7 +206,8 @@ class LLMExtractor:
             .replace("{existing_description_note}", desc_note)
         )
         raw = self._call_llm(prompt, text)
-        return self._parse(FacilityFacts, raw)
+        facts = self._parse(FacilityFacts, raw)
+        return _postprocess_facts(facts)
 
     # ── Full row processing ──────────────────────────────────────────
 

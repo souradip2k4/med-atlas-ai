@@ -14,7 +14,8 @@ from storage.database import DatabricksDatabase
 from storage.models import (
     FACILITY_FACTS_SCHEMA,
 )
-from pipeline.fact_generator import generate_facts
+
+from pipeline.facility_fact_generator import generate_facts
 
 load_dotenv()
 
@@ -41,30 +42,14 @@ def main() -> None:
     records_df = db.read_delta("facility_records")
     records = [row.asDict(recursive=True) for row in records_df.collect()]
     
-    processed_ids = set()
-    if db._table_exists("facility_facts"):
-        try:
-            existing_facts_df = db.read_delta("facility_facts").select("facility_id").distinct()
-            processed_ids = {r["facility_id"] for r in existing_facts_df.collect()}
-            logger.info("Checkpoint: Found %d unique facilities already processed in facility_facts", len(processed_ids))
-        except Exception as e:
-            logger.warning("Could not read existing facility_facts for checkpointing: %s", e)
-            
-    pending_records = []
-    for r in records:
-        if r["facility_id"] not in processed_ids:
-            pending_records.append(r)
-            
-
+    pending_records = records
 
     total_rows = len(pending_records)
-    logger.info("Pending facility records to process for facts: %d", total_rows)
-
+    logger.info("Total facility records to process for facts: %d", total_rows)
+    
     if total_rows == 0:
-        logger.info("═══ All facilities already processed. Nothing to do. ═══")
-        _print_summary(db)
+        logger.info("═══ No facility records found. ═══")
         return
-        
     logger.info("═══ Starting Fact Generation ═══")
     BATCH_SIZE = 50
     facts_batch: List[Dict[str, Any]] = []
@@ -84,11 +69,11 @@ def main() -> None:
         done += 1
         if done % 10 == 0 or done == total_rows:
             logger.info("Progress: %d/%d pending facilities done", done, total_rows)
-            
-        if (done % BATCH_SIZE == 0 or done == total_rows) and facts_batch:
-            facts_df = db.spark.createDataFrame(facts_batch, FACILITY_FACTS_SCHEMA)
-            db.append_delta(facts_df, "facility_facts")
-            facts_batch.clear()
+
+    # Single overwrite at the very end — all rows in one shot
+    if facts_batch:
+        facts_df = db.spark.createDataFrame(facts_batch, FACILITY_FACTS_SCHEMA)
+        db.write_delta(facts_df, "facility_facts", mode="overwrite")
 
     logger.info("Fact generation and batch-saving complete.")
     elapsed = time.time() - t0

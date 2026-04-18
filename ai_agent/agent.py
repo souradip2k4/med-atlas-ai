@@ -662,11 +662,12 @@ what the user is asking about. Do NOT over-fetch — only include types that are
 | What equipment a facility has                        | ["equipment"]                          |
 | A facility's opening hours, contact, departments     | ["capability"]                         |
 | General overview / type / location of a facility     | ["summary"]                            |
+| A facility's background, narrative, or mission       | ["description"]                        |
 | Whether procedures match equipment (plausibility)    | ["procedure", "equipment"]             |
 | Whether specialties match procedures                 | ["specialty", "procedure"]             |
 | Full clinical profile (deep validation / audit)      | ["specialty", "procedure", "equipment"]|
 | Contradictions or inconsistencies across all facts   | None (search across all types)         |
-| Similarity search ("hospitals like X")               | ["summary", "capability"]              |
+| Similarity search ("hospitals like X")               | ["summary", "description", "capability"]|
 
 NEVER pass all 5 fact_types unless contradictions/inconsistencies across all categories are
 explicitly asked for. Always pick the minimal relevant set.

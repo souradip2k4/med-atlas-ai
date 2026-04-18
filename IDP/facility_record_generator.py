@@ -61,21 +61,7 @@ def main() -> None:
 
     # ── 3 & 4. Extraction + Merge (parallel) ────────────────────────
     max_workers = int(os.getenv("MAX_WORKERS", "4"))
-    logger.info("═══ Stage 3-4: Identify pending rows for extraction ═══")
-
-    # Checkpointing: Filter out already processed records
-    processed_ids = set()
-    if db._table_exists("facility_records"):
-        try:
-            existing_df = db.read_delta("facility_records").select("facility_id")
-            processed_ids = {r["facility_id"] for r in existing_df.collect()}
-            logger.info("Checkpoint: Found %d already processed rows in facility_records", len(processed_ids))
-        except Exception as e:
-            logger.warning("Could not read existing facility_records for checkpointing: %s", e)
-
-    # Filter out already processed records
-    rows = [r for r in rows if str(r.get("unique_id") or r.get("pk_unique_id") or "") not in processed_ids]
-
+    
     max_process_rows = os.getenv("MAX_PROCESS_ROWS")
     if max_process_rows:
         try:
@@ -83,69 +69,60 @@ def main() -> None:
             rows = rows[:limit]
             logger.info("MAX_PROCESS_ROWS=%d. Will process up to %d unique facilities in this run.", limit, limit)
         except ValueError:
-            logger.warning("MAX_PROCESS_ROWS is not a valid integer. Processing all pending rows.")
+            logger.warning("MAX_PROCESS_ROWS is not a valid integer. Processing all rows.")
 
     total_rows = len(rows)
-    logger.info("Pending rows to process: %d", total_rows)
+    logger.info("Total rows to process: %d", total_rows)
 
     if total_rows == 0:
-        logger.info("═══ All rows already processed. Nothing to do. ═══")
+        logger.info("═══ No rows to process. ═══")
         _print_summary(db)
         return
 
-    # Flag: track whether any new rows were actually written this run
-    new_rows_written = False
-
-    BATCH_SIZE = 50
     facility_records_batch: List[Dict[str, Any]] = []
     done = 0
 
-    if total_rows > 0:
-        logger.info("═══ Starting Extraction (Batched Saves) ═══")
-        
-        logger.info("Connecting to Databricks Model Serving endpoint...")
-        extractor = LLMExtractor()
-        
-        def _process_row(
-            args: Tuple[int, Dict[str, Any]]
-        ) -> Optional[Dict[str, Any]]:
-            """Process a single row: extract → merge."""
-            idx, row = args
-            row_id = row.get("unique_id") or row.get("pk_unique_id") or str(idx)
-            try:
-                extraction = extractor.process_row(row)
-                record = merge_extraction_results(extraction, row)
-                return record
-            except Exception as exc:
-                logger.error(
-                    "Row %d (id=%s, name=%s) failed: %s — skipping",
-                    idx + 1, row_id, row.get("name", "?"), exc,
-                )
-                return None
+    logger.info("═══ Starting Extraction ═══")
+    logger.info("Connecting to Databricks Model Serving endpoint...")
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_process_row, (i, r)): i
-                for i, r in enumerate(rows)
-            }
-            for future in as_completed(futures):
-                record = future.result()
-                done += 1
-                if record:
-                    facility_records_batch.append(record)
-                
-                if done % 10 == 0 or done == total_rows:
-                    logger.info("Progress: %d/%d pending rows done", done, total_rows)
-                
-                # Batch save
-                if len(facility_records_batch) >= BATCH_SIZE or done == total_rows:
-                    if facility_records_batch:
-                        records_df = db.spark.createDataFrame(facility_records_batch, FACILITY_RECORDS_SCHEMA)
-                        db.append_delta(records_df, "facility_records")
-                        facility_records_batch.clear()
-                        new_rows_written = True
+    extractor = LLMExtractor()
 
-        logger.info("Extraction and batch-saving complete.")
+    def _process_row(
+        args: Tuple[int, Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Process a single row: extract → merge."""
+        idx, row = args
+        row_id = row.get("unique_id") or row.get("pk_unique_id") or str(idx)
+        try:
+            extraction = extractor.process_row(row)
+            record = merge_extraction_results(extraction, row)
+            return record
+        except Exception as exc:
+            logger.error(
+                "Row %d (id=%s, name=%s) failed: %s — skipping",
+                idx + 1, row_id, row.get("name", "?"), exc,
+            )
+            return None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_process_row, (i, r)): i
+            for i, r in enumerate(rows)
+        }
+        for future in as_completed(futures):
+            record = future.result()
+            done += 1
+            if record:
+                facility_records_batch.append(record)
+            if done % 10 == 0 or done == total_rows:
+                logger.info("Progress: %d/%d rows done", done, total_rows)
+
+    # Single overwrite at the very end — all rows in one shot
+    if facility_records_batch:
+        records_df = db.spark.createDataFrame(facility_records_batch, FACILITY_RECORDS_SCHEMA)
+        db.write_delta(records_df, "facility_records", mode="overwrite")
+
+    logger.info("Extraction complete. %d records written.", len(facility_records_batch))
 
     elapsed = time.time() - t0
     logger.info("═══ Pipeline complete in %.1f seconds ═══", elapsed)
