@@ -5,11 +5,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from ai_agent.agent import ALL_TOOLS, LLM_ENDPOINT
 from ai_agent.api.routes import agent, map
 
+import os
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("MedAtlasAgent FastAPI server starting...")
-    print(f"  LLM endpoint: {LLM_ENDPOINT}")
-    print(f"  Tools:        {[t.name for t in ALL_TOOLS]}")
+    active_catalog = os.environ.get("CATALOG")
+    active_schema = os.environ.get("SCHEMA")
+    print(f"  Target Catalog: {active_catalog}")
+    print(f"  Target Schema:  {active_schema}")
+    print(f"  LLM endpoint:   {LLM_ENDPOINT}")
+    print(f"  Tools:          {[t.name for t in ALL_TOOLS]}")
     yield
     print("MedAtlasAgent FastAPI server shutting down.")
 

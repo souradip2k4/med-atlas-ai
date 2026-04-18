@@ -12,7 +12,7 @@ def execute_sql(query: str) -> list[dict]:
     if not warehouse_id:
         raise ValueError("Environment variable DATABRICKS_WAREHOUSE_ID is required for SQL execution.")
 
-    catalog = os.environ.get("CATALOG", "med_atlas_ai")
+    catalog = os.environ.get("CATALOG")
     schema = os.environ.get("SCHEMA", "default")
 
     response = w.statement_execution.execute_statement(

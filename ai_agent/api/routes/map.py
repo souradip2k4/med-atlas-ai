@@ -1,7 +1,11 @@
 from fastapi import APIRouter
 from ai_agent.api.schemas.map import MapSearchRequest, FilterMetadata, FacilityPoint, ExtractMapMarkersRequest, ExtractMapMarkersResponse
 from ai_agent.api.services.databricks_sql import execute_sql
+import os
 
+CATALOG = os.environ.get("CATALOG")
+SCHEMA = os.environ.get("SCHEMA")
+TABLE_PREFIX = f"{CATALOG}.{SCHEMA}"
 router = APIRouter(prefix="/map", tags=["Map"])
 
 # Static metadata per user requirements
@@ -25,7 +29,7 @@ def _escape(val: str) -> str:
 @router.get("/metadata", response_model=FilterMetadata)
 def get_metadata():
     """Fetch distinct regions, cities, and specialties, plus return static filter lists."""
-    query = "SELECT DISTINCT state, city FROM med_atlas_ai.default.facility_records WHERE country = 'Ghana' AND state IS NOT NULL"
+    query = f"SELECT DISTINCT state, city FROM {TABLE_PREFIX}.facility_records WHERE country = 'Ghana' AND state IS NOT NULL"
     results = execute_sql(query)
     
     cities_by_region = {}
@@ -42,7 +46,7 @@ def get_metadata():
     regions = list(cities_by_region.keys())
     
     # Fetch unique specialties
-    spec_query = "SELECT DISTINCT explode(specialties) AS specialty FROM med_atlas_ai.default.facility_records WHERE country = 'Ghana' AND specialties IS NOT NULL"
+    spec_query = f"SELECT DISTINCT explode(specialties) AS specialty FROM {TABLE_PREFIX}.facility_records WHERE country = 'Ghana' AND specialties IS NOT NULL"
     spec_results = execute_sql(spec_query)
     specialties = sorted(
         [r.get("specialty") for r in spec_results if r.get("specialty")]
@@ -111,7 +115,7 @@ def search_facilities(request: MapSearchRequest):
             facility_id, facility_name, latitude, longitude, city, state, 
             year_established, facility_type, operator_type, organization_type, 
             affiliation_types, description
-        FROM med_atlas_ai.default.facility_records
+        FROM {TABLE_PREFIX}.facility_records
         WHERE {where_clause}
     """
     
@@ -122,21 +126,26 @@ def search_facilities(request: MapSearchRequest):
         "facilities": results
     }
 
-@router.get("/facility/{facility_id}")
-def get_facility(facility_id: str):
+@router.get("/facility/{identifier}")
+def get_facility(identifier: str):
     """
-    Fetch the full deep-dive profile of a single facility.
+    Fetch the full deep-dive profile of a single facility by ID or Name.
     
     Path Parameter:
-        facility_id: The UUID or unique identifier of the facility.
+        identifier: The UUID, unique identifier, or exact name of the facility.
         
     Example URL:
         GET /map/facility/fac-123-abc
+        GET /map/facility/Korle-Bu%20Teaching%20Hospital
     """
+    # Normalize extra spaces to exactly 1 space
+    clean_identifier = " ".join(identifier.split())
+    
     query = f"""
         SELECT *
-        FROM med_atlas_ai.default.facility_records
-        WHERE facility_id = '{_escape(facility_id)}'
+        FROM {TABLE_PREFIX}.facility_records
+        WHERE facility_id = '{_escape(clean_identifier)}'
+           OR LOWER(facility_name) = LOWER('{_escape(clean_identifier)}')
         LIMIT 1
     """
     results = execute_sql(query)
@@ -237,7 +246,7 @@ def extract_map_markers(request: ExtractMapMarkersRequest):
     
     query = f"""
         SELECT facility_id, facility_name, latitude, longitude
-        FROM med_atlas_ai.default.facility_records
+        FROM {TABLE_PREFIX}.facility_records
         WHERE organization_type IN ('facility', 'ngo')
           AND latitude IS NOT NULL
           AND longitude IS NOT NULL
