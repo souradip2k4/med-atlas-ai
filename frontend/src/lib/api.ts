@@ -42,8 +42,10 @@ export async function searchFacilities(payload: MapSearchPayload): Promise<Searc
   };
 }
 
-export async function fetchFacilityProfile(facilityId: string): Promise<FacilityProfile> {
-  const response = await api.get<Record<string, unknown>>(`/map/facility/${facilityId}`);
+export async function fetchFacilityProfile(identifier: string): Promise<FacilityProfile> {
+  const response = await api.get<Record<string, unknown>>(
+    `/map/facility/${encodeURIComponent(identifier)}`,
+  );
 
   if ('error' in response.data) {
     throw new Error(String(response.data.error));

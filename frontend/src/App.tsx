@@ -158,8 +158,14 @@ function App() {
           filters={filters}
           resolvedTheme={resolvedTheme}
           activeDropdown={activeDropdown}
+          isFacilitySearchLoading={facilityQuery.isLoading || facilityQuery.isFetching}
           onDropdownChange={setActiveDropdown}
           onThemeToggle={() => toggleTheme(resolvedTheme)}
+          onFacilitySearch={(facilityName) => {
+            startTransition(() => {
+              setSelectedFacilityId(facilityName.trim());
+            });
+          }}
           onRegionSelect={(region) => {
             startTransition(() => {
               setRegion(region);

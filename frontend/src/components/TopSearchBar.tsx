@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { MapPinned, MapPin, MoonStar, Stethoscope, SunMedium, X } from 'lucide-react';
+import { LoaderCircle, MapPinned, MapPin, MoonStar, Search, Stethoscope, SunMedium, X } from 'lucide-react';
 import type { ThemeMode } from '../lib/types';
 
 import { formatLabel } from '../lib/format';
@@ -11,8 +11,10 @@ interface TopSearchBarProps {
   filters: SearchFilters;
   resolvedTheme: ThemeMode;
   activeDropdown: DropdownKey;
+  isFacilitySearchLoading?: boolean;
   onDropdownChange: (dropdown: DropdownKey) => void;
   onThemeToggle: () => void;
+  onFacilitySearch: (facilityName: string) => void;
   onRegionSelect: (region: string) => void;
   onCitySelect: (city: string) => void;
   onToggleSpecialty: (specialty: string) => void;
@@ -92,8 +94,10 @@ export function TopSearchBar({
   filters,
   resolvedTheme,
   activeDropdown,
+  isFacilitySearchLoading = false,
   onDropdownChange,
   onThemeToggle,
+  onFacilitySearch,
   onRegionSelect,
   onCitySelect,
   onToggleSpecialty,
@@ -102,8 +106,11 @@ export function TopSearchBar({
   onClearSpecialties,
 }: TopSearchBarProps) {
   const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [facilitySearchValue, setFacilitySearchValue] = useState('');
   const shellRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const facilitySearchInputRef = useRef<HTMLInputElement | null>(null);
   const regionRef = useRef<HTMLDivElement | null>(null);
   const cityRef = useRef<HTMLDivElement | null>(null);
   const specialtyRef = useRef<HTMLDivElement | null>(null);
@@ -112,6 +119,7 @@ export function TopSearchBar({
     function handlePointerDown(event: MouseEvent) {
       if (!shellRef.current?.contains(event.target as Node)) {
         onDropdownChange(null);
+        setSearchOpen(false);
       }
     }
 
@@ -123,6 +131,21 @@ export function TopSearchBar({
 
   const cityOptions = metadata?.cities_by_region[filters.region] ?? [];
   const specialtyCount = filters.specialties.length;
+
+  useEffect(() => {
+    if (!searchOpen) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      facilitySearchInputRef.current?.focus();
+      facilitySearchInputRef.current?.select();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [searchOpen]);
 
   useLayoutEffect(() => {
     if (!activeDropdown) {
@@ -168,12 +191,41 @@ export function TopSearchBar({
     };
   }, [activeDropdown, filters.region, specialtyCount, cityOptions.length]);
 
+  const handleFacilitySearchSubmit = () => {
+    const trimmedValue = facilitySearchValue.trim();
+    if (!trimmedValue) {
+      return;
+    }
+
+    onDropdownChange(null);
+    onFacilitySearch(trimmedValue);
+    setSearchOpen(false);
+  };
+
   return (
     <div
       className="absolute left-1/2 top-7 z-30 w-[min(880px,calc(100%-112px))] -translate-x-1/2 max-[920px]:top-3 max-[920px]:w-[calc(100%-24px)]"
       ref={shellRef}
     >
       <div className="relative mx-auto max-w-[700px]" ref={frameRef}>
+        <div className="absolute left-[-58px] top-1/2 hidden -translate-y-1/2 min-[921px]:block">
+          <div className="flex h-11 items-center overflow-hidden rounded-full border border-border-white-soft bg-surface-panel-strong text-accent-600 shadow-overlay backdrop-blur-[14px] transition-[background-color,box-shadow] duration-250 hover:bg-surface-card-strong">
+            <button
+              type="button"
+              className={`inline-flex size-11 shrink-0 items-center justify-center transition ${
+                searchOpen ? 'bg-surface-card-strong' : ''
+              }`}
+              onClick={() => {
+                onDropdownChange(null);
+                setSearchOpen((current) => !current);
+              }}
+              aria-label={searchOpen ? 'Close facility search' : 'Search by facility name'}
+            >
+              <Search className="size-5" strokeWidth={2.1} />
+            </button>
+          </div>
+        </div>
+
         <div className="grid animate-chrome-in grid-cols-3 gap-2 rounded-[30px] border border-border-white-soft bg-surface-panel-strong shadow-search backdrop-blur-[18px]">
           <div ref={regionRef}>
             <FieldButton
@@ -225,6 +277,38 @@ export function TopSearchBar({
             <MoonStar className="size-5" strokeWidth={2.1} />
           )}
         </button>
+
+        <div className="mt-2 min-[921px]:hidden">
+          <div className="flex items-center gap-2 rounded-[22px] border border-border-white-soft bg-surface-panel-strong px-3 py-2 shadow-overlay backdrop-blur-[14px]">
+            <Search className="size-4.5 shrink-0 text-accent-600" />
+            <input
+              type="text"
+              value={facilitySearchValue}
+              onChange={(event) => setFacilitySearchValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleFacilitySearchSubmit();
+                }
+              }}
+              placeholder="Search facility by name"
+              className="min-w-0 flex-1 border-0 bg-transparent text-[0.92rem] font-medium text-ink-900 placeholder:text-ink-400 focus:outline-none"
+            />
+            <button
+              type="button"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-accent text-accent-700 transition hover:bg-surface-accent-strong disabled:cursor-not-allowed disabled:opacity-55"
+              onClick={handleFacilitySearchSubmit}
+              disabled={!facilitySearchValue.trim() || isFacilitySearchLoading}
+              aria-label="Search facility"
+            >
+              {isFacilitySearchLoading ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Search className="size-4" />
+              )}
+            </button>
+          </div>
+        </div>
 
       {activeDropdown === 'region' ? (
         <div
@@ -340,6 +424,56 @@ export function TopSearchBar({
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {searchOpen ? (
+        <div className="absolute left-0 top-[calc(100%+12px)] hidden w-[min(460px,calc(100vw-140px))] animate-panel-in rounded-panel border border-border-white-soft bg-surface-panel-strong p-3.5 shadow-panel backdrop-blur-[16px] min-[921px]:block">
+          <div className="flex items-center gap-2 rounded-[22px] border border-border-white-soft bg-surface-card px-3 py-2.5 shadow-inset-soft">
+            <Search className="size-4.5 shrink-0 text-accent-600" />
+            <input
+              ref={facilitySearchInputRef}
+              type="text"
+              value={facilitySearchValue}
+              onChange={(event) => setFacilitySearchValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleFacilitySearchSubmit();
+                }
+
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setSearchOpen(false);
+                }
+              }}
+              placeholder="Search facility by name"
+              className="min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-[0.96rem] font-medium text-ink-900 outline-none ring-0 placeholder:text-ink-400 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0"
+            />
+            {facilitySearchValue ? (
+              <button
+                type="button"
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-ink-400 transition hover:bg-surface-filter-strong hover:text-accent-600"
+                onClick={() => setFacilitySearchValue('')}
+                aria-label="Clear search query"
+              >
+                <X className="size-4" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-surface-accent text-accent-700 transition hover:bg-surface-accent-strong disabled:cursor-not-allowed disabled:opacity-55"
+              onClick={handleFacilitySearchSubmit}
+              disabled={!facilitySearchValue.trim() || isFacilitySearchLoading}
+              aria-label="Search facility"
+            >
+              {isFacilitySearchLoading ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Search className="size-4" />
+              )}
+            </button>
+          </div>
         </div>
       ) : null}
       </div>
