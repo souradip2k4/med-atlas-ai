@@ -77,7 +77,7 @@ function MetaRow({
 function DetailSkeleton() {
   return (
     <div className="overflow-auto bg-surface-panel-strong px-7 pb-8 pt-6">
-      <div className="rounded-[28px] border border-border-soft bg-surface-card p-5 shadow-card">
+      <div className="rounded-[28px] border border-border-soft bg-surface-card p-2.5 shadow-card">
         <div className="mb-5 flex gap-2.5">
           <div className="skeleton-block h-10 w-28 rounded-full" />
           <div className="skeleton-block h-10 w-24 rounded-full" />
@@ -144,8 +144,8 @@ export function FacilityDetailsPanel({
       )
     : [preview?.city, preview?.state].filter((item): item is string => Boolean(item));
 
-  const overviewParts = [profile?.description, profile?.mission_statement]
-    .filter((item): item is string => Boolean(item && item.trim()));
+  // const overviewParts = [profile?.description, profile?.mission_statement]
+  //   .filter((item): item is string => Boolean(item && item.trim()));
 
   const operationalRows = [
     profile?.capacity ? { label: 'Capacity', value: String(profile.capacity) } : null,
@@ -201,13 +201,13 @@ export function FacilityDetailsPanel({
             <p className="text-[1rem] leading-8 text-ink-600">{description}</p>
           </div>
 
-          <DetailSection icon={Globe} title="Overview">
+          {/* <DetailSection icon={Globe} title="Overview">
             <div className="grid gap-4 text-[1.02rem] leading-8 text-ink-600">
               {(overviewParts.length > 0 ? overviewParts : [description]).map((item) => (
                 <p key={item}>{item}</p>
               ))}
             </div>
-          </DetailSection>
+          </DetailSection> */}
 
           {profile?.specialties?.length ? (
             <DetailSection icon={Stethoscope} title="Specialties">

@@ -39,8 +39,8 @@ function ResultCard({
 }) {
 
   const cardClass = selected || hovered
-    ? 'grid grid-cols-1 items-start gap-4.5 rounded-panel border-0 bg-surface-card-strong p-4.5 text-left shadow-card-active transition duration-180'
-    : 'grid grid-cols-1 items-start gap-4.5 rounded-panel border-0 bg-surface-card p-4.5 text-left shadow-card transition duration-180 hover:-translate-y-0.5 hover:bg-surface-card-strong hover:shadow-card-active';
+    ? 'result-card-shell grid max-h-[400px] grid-cols-1 items-start gap-4.5 overflow-hidden rounded-panel border-0 bg-surface-card-strong p-4.5 text-left shadow-card-active transition duration-180'
+    : 'result-card-shell grid max-h-[400px] grid-cols-1 items-start gap-4.5 overflow-hidden rounded-panel border-0 bg-surface-card p-4.5 text-left shadow-card transition duration-180 hover:-translate-y-0.5 hover:bg-surface-card-strong hover:shadow-card-active';
 
   return (
     <button
@@ -50,15 +50,15 @@ function ResultCard({
       onMouseEnter={() => onHover(facility.facility_id)}
       onMouseLeave={() => onHover(null)}
     >
-      <div>
-        <span className="mb-2.5 inline-flex rounded-full bg-surface-teal px-3 py-1.5 text-eyebrow font-bold uppercase tracking-[0.08em] text-tone-teal">
+      <div className="flex min-h-0 h-full flex-col">
+        <span className="mb-2.5 inline-flex rounded-md text-eyebrow font-bold uppercase  text-tone-teal">
           {formatLabel(facility.facility_type) || 'Facility'}
         </span>
-        <div className="mb-2 text-ui-sm text-ink-500">
+        {/* <div className="mb-2 text-ui-sm text-ink-500">
           {facility.organization_type ? formatLabel(facility.organization_type) : 'Healthcare network'}
-        </div>
-        <h3 className="mb-2.5 text-lg font-semibold leading-[1.08] text-ink-900">{facility.facility_name}</h3>
-        <p className="mb-4 text-ui text-ink-600">
+        </div> */}
+        <h3 className="mb-2.5 text-lg font-normal text-ink-900">{facility.facility_name}</h3>
+        <p className="sidebar-card-description font-serif mb-4 min-h-0 flex-1 text-ink-600">
           {compactText(
             facility.description,
             'Profile available. Open this facility to inspect specialties, contacts, and location details.',
@@ -69,10 +69,12 @@ function ResultCard({
             <MapPin className="size-4 text-accent-600" />
             {[facility.city, facility.state].filter(Boolean).join(', ') || 'Location not listed'}
           </span>
-          <span className="inline-flex items-center gap-2">
-            <Building2 className="size-4 text-accent-600" />
-            {facility.operator_type ? formatLabel(facility.operator_type) : 'Operator unknown'}
-          </span>
+          {facility.operator_type === "public" || facility.operator_type === "private" && (
+            <span className="inline-flex items-center gap-2">
+              <Building2 className="size-4 text-accent-600" />
+              {formatLabel(facility.operator_type)}
+            </span>
+          )}
         </div>
       </div>
     </button>
