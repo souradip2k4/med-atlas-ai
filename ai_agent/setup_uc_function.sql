@@ -13,7 +13,7 @@
 -- inside GROUP BY / aggregate functions are rejected by Spark SQL.
 -- =========================================================================
 
-CREATE OR REPLACE FUNCTION med_atlas_ai.default.analyze_medical_query(
+CREATE OR REPLACE FUNCTION med_atlas_ai_v2.default.analyze_medical_query(
   query_json STRING
 )
 RETURNS STRING

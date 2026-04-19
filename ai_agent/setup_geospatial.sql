@@ -21,7 +21,7 @@
 --   city              STRING  — restrict to fr.city = city
 -- =========================================================================
 
-CREATE OR REPLACE FUNCTION med_atlas_ai.default.find_facilities_nearby(
+CREATE OR REPLACE FUNCTION med_atlas_ai_v2.default.find_facilities_nearby(
   query_json STRING
 )
 RETURNS STRING
