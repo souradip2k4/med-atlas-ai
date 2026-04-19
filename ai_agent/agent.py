@@ -28,8 +28,32 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(_env_path)
 
-os.environ["DATABRICKS_DISABLE_NOTICE"] = "true"
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID")
+tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+registry_uri = os.getenv("MLFLOW_REGISTRY_URI")
+# Optional overrides:
+# - In Databricks Apps, experiment resource injection is enough for tracking.
+# - For local remote tracking, you can still set MLFLOW_TRACKING_URI / auth env vars.
+if tracking_uri:
+    mlflow.set_tracking_uri(tracking_uri)
+
+# Registry URI selection:
+# - Honor explicit MLFLOW_REGISTRY_URI.
+# - Default to Unity Catalog registry when using Databricks tracking.
+if registry_uri:
+    mlflow.set_registry_uri(registry_uri)
+
+try:
+    if experiment_id:
+        mlflow.set_experiment(experiment_id=experiment_id)
+    else:
+        warnings.warn(
+            "No MLflow experiment configured. Set MLFLOW_EXPERIMENT_ID (recommended in Databricks Apps)."
+        )
+except mlflow.exceptions.MlflowException as exc:
+    warnings.warn(
+        f"MLflow experiment setup failed ({exc}). Continuing without forcing experiment selection."
+    )
 # Enable LangChain tracing so tool calls and LLM responses are captured in MLflow.
 mlflow.langchain.autolog()
 
@@ -64,7 +88,7 @@ from databricks_langchain import ChatDatabricks
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 LLM_ENDPOINT  = os.environ["LLM_ENDPOINT"]
-VS_INDEX     = os.environ.get("VS_INDEX")
+VS_INDEX     = os.environ.get("VECTOR_SEARCH_INDEX")
 GENIE_ID     = os.environ["GENIE_SPACE_ID"]
 CATALOG      = os.environ.get("CATALOG")
 SCHEMA       = os.environ.get("SCHEMA", "default")

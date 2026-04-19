@@ -3,7 +3,7 @@ name = "med-atlas-ai"
 version = "0.1.0"
 description = "Med-Atlas AI Project"
 readme = "README.md"
-requires-python = "==3.12"
+requires-python = ">=3.12"
 dependencies = [
     "databricks-connect>=16.4.15",
     "databricks-sdk==0.102.0",
