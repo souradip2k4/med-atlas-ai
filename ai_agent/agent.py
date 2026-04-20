@@ -34,26 +34,28 @@ registry_uri = os.getenv("MLFLOW_REGISTRY_URI")
 # Optional overrides:
 # - In Databricks Apps, experiment resource injection is enough for tracking.
 # - For local remote tracking, you can still set MLFLOW_TRACKING_URI / auth env vars.
-if tracking_uri:
-    mlflow.set_tracking_uri(tracking_uri)
+# if tracking_uri:
+#     mlflow.set_tracking_uri(tracking_uri)
 
-# Registry URI selection:
-# - Honor explicit MLFLOW_REGISTRY_URI.
-# - Default to Unity Catalog registry when using Databricks tracking.
-if registry_uri:
-    mlflow.set_registry_uri(registry_uri)
+# # Registry URI selection:
+# # - Honor explicit MLFLOW_REGISTRY_URI.
+# # - Default to Unity Catalog registry when using Databricks tracking.
+# if registry_uri:
+#     mlflow.set_registry_uri(registry_uri)
 
-try:
-    if experiment_id:
-        mlflow.set_experiment(experiment_id=experiment_id)
-    else:
-        warnings.warn(
-            "No MLflow experiment configured. Set MLFLOW_EXPERIMENT_ID (recommended in Databricks Apps)."
-        )
-except mlflow.exceptions.MlflowException as exc:
-    warnings.warn(
-        f"MLflow experiment setup failed ({exc}). Continuing without forcing experiment selection."
-    )
+# try:
+#     if experiment_id:
+#         mlflow.set_experiment(experiment_id=experiment_id)
+#     else:
+#         warnings.warn(
+#             "No MLflow experiment configured. Set MLFLOW_EXPERIMENT_ID (recommended in Databricks Apps)."
+#         )
+# except mlflow.exceptions.MlflowException as exc:
+#     warnings.warn(
+#         f"MLflow experiment setup failed ({exc}). Continuing without forcing experiment selection."
+#     )
+
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
 # Enable LangChain tracing so tool calls and LLM responses are captured in MLflow.
 mlflow.langchain.autolog()
 
@@ -209,7 +211,7 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 # ─── Tool 3 — Medical Agent ───────────────────────────────────────────────────
 
 # Batch size for deep validation LLM calls
-_DEEP_VALIDATION_BATCH_SIZE = 15
+_DEEP_VALIDATION_BATCH_SIZE = 20
 
 _DEEP_VALIDATION_PROMPT = """You are a medical infrastructure validator. Analyze each facility below for specialty↔procedure↔equipment consistency.
 
@@ -258,20 +260,18 @@ def medical_agent_tool(
     Uses the analyze_medical_query UC function on facility_records
     to detect data quality issues and anomalies.
 
-    Returns data for 5 analysis types:
+    Returns data for 4 analysis types:
       1. regional_coverage        — per-region service coverage arrays for LLM gap analysis
       2. anomaly_flagging         — outlier capacity/doctor counts (3 std devs, global baseline)
       3. ngo_overlap_raw          — NGOs grouped by affiliation+region for LLM overlap analysis
-      4. facility_profile_counts  — raw per-facility counts for LLM gap classification
-      5. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
-                                    (also handles feature/equipment mismatch queries)
-                                    (batched internally, 8 facilities per LLM call)
+      4. deep_validation          — region-scoped specialty↔procedure↔equipment consistency check
+                                    (batched internally)
                                     REQUIRES: region OR facility_name OR facility_id
 
     NOTE — For classification/breakdown queries use genie_chat_tool instead.
     NOTE — For contradiction detection, use vector_search_tool instead.
 
-    IMPORTANT — For branches that return raw data (types 1, 3, 6), YOU must synthesize
+    IMPORTANT — For branches that return raw data (types 1, 2, 3), YOU must synthesize
       a meaningful analysis — do NOT just echo the raw data.
 
     SCOPE FILTERS (all optional — apply ONLY what the user explicitly mentioned):
@@ -291,8 +291,8 @@ def medical_agent_tool(
 
     Trigger keywords: "anomal", "ngo", "classify", "gap", "unmet",
     "outlier", "flag", "abnormal", "red flag",
-    "problem type", "workforce", "staffing", "overlapping", "corrobor",
-    "mismatch", "feature mismatch", "procedure count", "equipment count",
+    "overlapping", "corrobor", "mismatch", "feature mismatch",
+    "procedure count", "equipment count",
     "validate", "consistency", "verify claim", "capable", "infrastructure".
 
     NOT for: oversupply, scarcity, specialist distribution, web presence → use genie_chat_tool.
@@ -350,7 +350,7 @@ def medical_agent_tool(
         findings = json.loads(findings_raw) if isinstance(findings_raw, str) else findings_raw
         outer["findings"] = findings
 
-        # Also parse data_coverage_summary (Branches 3, 4, 6 return it as a JSON string)
+        # Also parse data_coverage_summary (Branches 2 and 4 return it as a JSON string)
         cov_raw = outer.get("data_coverage_summary")
         if isinstance(cov_raw, str):
             try:
@@ -361,7 +361,7 @@ def medical_agent_tool(
 
         # ── Batched LLM Evaluation ────────────────────────────────────────
         # Only deep_validation requires Python-level batching.
-        # Feature mismatch is now fully handled inside Branch 7's deep_validation path.
+        # Feature mismatch is now fully handled inside Branch 4's deep_validation path.
         _LLM_BATCH_TYPES = {
             "deep_validation": _DEEP_VALIDATION_PROMPT,
         }
@@ -671,8 +671,7 @@ IS_SEMANTIC = True if ANY of these keywords appear:
 
 IS_ANALYTIC = True if ANY of these keywords appear:
   "anomal", "gap", "unmet", "outlier", "flag",
-  "abnormal", "red flag", "problem type", "workforce",
-  "staffing", "correlat", "overlapping", "mismatch",
+  "abnormal", "red flag", "correlat", "overlapping", "mismatch",
   "feature mismatch", "procedure count", "equipment count", "signal",
   "validate", "consistency", "verify claim", "capable", "infrastructure",
   "procedure.*equipment", "equipment.*procedure"
@@ -753,10 +752,9 @@ When calling `medical_agent_tool`, you MUST include one of the Exact Match Keywo
 | **Branch 1: Unmet Needs** | Missing specialties or absent procedures in a region | `unmet`, `gap`, `need`, `service gap` |
 | **Branch 2: Capacity Outliers** | Unusually high/low bed or doctor numbers | `outlier`, `anomal`, `flag`, `capacity outlier`, `doctor anomaly` |
 | **Branch 3: NGO Overlap** | Multiple NGOs operating similarly in the same city | `ngo overlap`, `overlapping ngo`, `same ngo`, `same region` |
-| **Branch 4: Problem Type** | Facilities lacking all data for equipment or procedures | `problem type`, `root cause`, `gap type`, `classify gap`, `staff shortage` |
-| **Branch 5: Deep Validation** | Verifying claims/mismatches. *(Requires passing a `region` or `facility_name`!)* | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `infrastr` |
+| **Branch 4: Deep Validation** | Verifying claims/mismatches, classifying facility gaps (equipment vs staff vs service), or root-cause analysis. *(Requires passing a `region` or `facility_name`!)* | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `infrastr`, `equipment gap`, `staffing gap`, `classify gap`, `root cause` |
 
-*Example:* If the user asks "Find hospitals making suspicious surgical claims", DO NOT just use `"suspicious surgical claims"`. You must inject a Branch 5 keyword: `"verify claim for suspicious surgical claims"`.
+*Example:* If the user asks "Find hospitals making suspicious surgical claims", DO NOT just use `"suspicious surgical claims"`. You must inject a Branch 4 keyword: `"verify claim for suspicious surgical claims"`.
 
 ### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
 
@@ -769,14 +767,9 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
   • For `regional_coverage` (Unmet Needs):
       - `specialties_missing` is a **pre-computed, definitive SQL list** — report every specialty in it as a **confirmed gap** for that region (these exist elsewhere in the dataset but not here).
       - For `procedures_present` and `equipment_present` (free-text): apply your medical domain knowledge to identify what services or equipment a region of that size and facility count would typically need but appears to lack. These are NOT pre-computed gaps — they require your reasoning.
-  • For `facility_profile_counts` (Problem Type):
-      1. **ALWAYS start** by using `data_coverage_summary` to state the systemic data availability (e.g. "We only have equipment data for X% of facilities").
-      2. For each facility, check the `_status` fields (`equipment_status`, `specialty_status`, `procedure_status`):
-         - If a status is **`missing_data`**: The database simply lacks records for this category. Do NOT diagnose this as a medical gap. Group these as "Facilities with Unverifiable Missing Data" and explain why they cannot be fully evaluated.
-         - If a status is **`true_zero`**: This is a confirmed absence of capability. Classify these true medical gaps as "equipment_gap" (has doctors/specialties but truly 0 equipment), "service_gap" (has equipment but truly 0 services/procedures), or "overclaim_gap" (claims many procedures but has 0 verifiable specialties).
   • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
   • For `deep_validation` (Verifying claims and capabilities):
-      The tool has already analyzed all matching facilities in sequential batches of 15.
+      The tool has already analyzed all matching facilities in sequential batches of 20.
       It returns a `validation_summary` — a plain-text block where each anomalous facility
       has a compact blurb: [SEVERITY] [Facility Name] – [core mismatch]. Missing: [...]. [Reasoning] - [brief medical reasoning]
       Consistent facilities are omitted from the summary entirely.

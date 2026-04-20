@@ -1,15 +1,15 @@
 # Med-Atlas-AI: Intelligent Document Processing (IDP) Pipeline
 
-A production-grade Databricks-powered IDP pipeline that ingests raw healthcare facility data from Ghana, extracts structured information through a 4-step LLM chain, generates semantically rich fact texts optimised for **Vector Search (RAG)**, and produces multi-dimensional **regional analytics** designed for **Text-to-SQL** querying. The pipeline writes to three core Delta tables on Unity Catalog, enabling a downstream LangGraph AI agent to answer complex healthcare infrastructure questions.
+A production-grade Databricks-powered IDP pipeline that ingests raw healthcare facility data from Ghana, extracts structured information through an LLM chain, generates semantically rich fact texts optimised for **Vector Search (RAG)**, and produces multi-dimensional **regional analytics** designed for **Text-to-SQL** querying. The pipeline writes to three core Delta tables on Unity Catalog, enabling a downstream LangGraph AI agent to answer complex healthcare infrastructure questions.
 
 ---
 
 ## Architecture Overview
 
-The pipeline processes data through 7 sequential stages. Each CSV row passes through LLM extraction, deterministic merging, hybrid fact generation, and regional aggregation.
+The pipeline processes data through 6 sequential stages. Each CSV row passes through deduplication, LLM extraction, a 5-step deterministic merge (including Gemini-based location inference and LocationIQ geocoding), hybrid fact generation, and regional aggregation.
 
 ```
-CSV File (Ghana healthcare facilities)
+CSV File (Ghana healthcare facilities — 987 raw rows)
   │
   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -28,55 +28,65 @@ CSV File (Ghana healthcare facilities)
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 3 — Checkpointing                                                 │
-│  Reads existing facility_ids from facility_records to skip               │
-│  already-processed rows. Respects MAX_PROCESS_ROWS budget.               │
+│  Stage 2b — Deduplication (deduplicator.py)                              │
+│  Groups rows by pk_unique_id. For each group, merges duplicate rows      │
+│  by consolidating non-null values column-by-column.                      │
+│  Result: 987 raw rows → 797 unique facility records (190 removed).       │
+│  MAX_PROCESS_ROWS caps how many unique rows are processed in one run.    │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 4 — LLM Extraction Chain (extractor.py)                           │
-│  Each row is passed through 4 sequential LLM calls:                      │
-│    ① Organization Extraction → facility names, NGO names                 |
-│    ② Facility Fact Extraction → procedures, equipment, capabilities      │
-│    ③ Medical Specialty Extraction → specialties list                     │
-│    ④ Facility Structured Info → address, contact, capacity, etc.         │
+│  Stage 3 — LLM Extraction Chain (extractor.py)                           │
+│  Each row is passed through a single LLM call:                           │
+│    ① Facility Fact Extraction → procedures, equipment,                   │
+│       capabilities, specialties, description, addresses,                 │
+│       and contact fields — free-form medical facts.                      │
 │  Runs in parallel via ThreadPoolExecutor (configurable MAX_WORKERS).     │
+│  Capability arrays pass through deterministic _GARBAGE_KEYWORDS          │
+│  filtering (case-insensitive fuzzy match) to strip directory/contact     │
+│  noise BEFORE any downstream use.                                        │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 5 — Merge & Shape (merger.py)                                     │
-│  Consolidates all 4 LLM outputs + original CSV row into a single         │
-│  flat dict matching FACILITY_RECORDS_SCHEMA.                             │
-│  Uses _first_non_null() for scalars, _merge_arrays() for lists.          │
-│  Includes deterministic Ghana city→region lookup fallback.               │
-│  Output → facility_records Delta table                                   │
+│  Stage 4 — Merge & Shape (merger.py)                                     │
+│  Consolidates the LLM output + original CSV row into a single flat dict  │
+│  matching FACILITY_RECORDS_SCHEMA via a 5-step location cascade:         │
+│    1. Direct CSV values (city, state).                                   │
+│    2. Deterministic _GHANA_CITY_REGION dictionary lookup (100+ cities).  │
+│    3. Gemini API — Case 1: city known, region missing.                   │
+│    4. Gemini API — Case 2: both city AND region missing.                 │
+│    5. LocationIQ geocoder — resolves lat/lon from the full address.      │
+│  Gemini calls are controlled by a StrictThrottle (14 RPM) shared across  │
+│  all workers. LocationIQ is guarded by a global threading.Lock enforcing │
+│  a 2-requests/second rate limit.                                         │
+│  _clean_array() applies _GARBAGE_KEYWORDS filter on all array fields.    │
+│  Output → facility_records Delta table (single overwrite at run end)     │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 6 — Hybrid Fact Generation (fact_generator.py)                    │
-│  Generates ≤5 semantically rich rows per facility:                       │
-│    • 1 "summary" row (all scalar fields merged into a paragraph)         │
-│    • 1 "procedure" row (all procedures comma-joined)                     │
-│    • 1 "equipment" row (all equipment comma-joined)                      │
-│    • 1 "capability" row (all capabilities comma-joined)                  │
-│    • 1 "specialty" row (all specialties comma-joined)                    │
+│  Stage 5 — Hybrid Fact Generation (facility_fact_generator.py)           │
+│  Generates ≤6 semantically rich rows per facility:                       │
+│    • 1 "summary"     row  — core identity: name, type, location,         │
+│                             org_type, affiliation (NO description/mission)│
+│    • 1 "description" row  — narrative: description + mission_statement   │
+│    • 1 "procedure"   row  — all procedures comma-joined                  │
+│    • 1 "equipment"   row  — all equipment comma-joined                   │
+│    • 1 "capability"  row  — all capabilities comma-joined                │
+│    • 1 "specialty"   row  — all specialties comma-joined                 │
 │  Missing data → row is silently skipped (never "Unknown"/"null").        │
-│  Output → facility_facts Delta table (for Vector Search / RAG)           │
+│  Output → facility_facts Delta table (single overwrite at run end)       │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 7 — Regional Insights Aggregation (main.py)                       │
-│  PySpark groupBy aggregations across 6 dimensions:                       │
-│    ① overview — total facilities, beds, doctors per region              │
-│    ② operator — public vs private breakdown with bed/doctor counts      │
-│    ③ specialty — facility count per specialty per region                │
-│    ④ procedure — facility count per procedure per region                │
-│    ⑤ equipment — facility count per equipment type per region           │
-│    ⑥ capability — facility count per capability per region              │
+│  Stage 6 — Regional Insights Aggregation (compute_regional_insights.py)  │
+│  PySpark groupBy aggregations across 3 dimensions:                       │
+│    ① overview  — total facilities, beds, doctors per region/city         │
+│    ② operator  — public vs private breakdown with bed/doctor counts      │
+│    ③ specialty — facility count per specialty per region/city            │
 │  Output → regional_insights Delta table (for Text-to-SQL / Genie)        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -89,26 +99,28 @@ CSV File (Ghana healthcare facilities)
 IDP/
 ├── config/                                 # LLM prompt definitions & Pydantic output models
 │   ├── __init__.py
-│   ├── organization_extraction.py          # OrganizationExtractionOutput model + system prompt
-│   ├── free_form.py                        # FacilityFacts model + system prompt
-│   ├── medical_specialties.py              # MedicalSpecialties model + system prompt
-│   └── facility_and_ngo_fields.py          # Facility / NGO structured models + system prompt
+│   ├── free_form.py                        # FacilityFacts model + system prompt (primary LLM step)
+│   └── medical_specialties.py             # MedicalSpecialties model (used for reference)
 │
 ├── pipeline/                               # Core processing pipeline
 │   ├── __init__.py
 │   ├── loader.py                           # CSV → List[Dict] via Pandas
+│   ├── deduplicator.py                     # pk_unique_id deduplication + row merging
 │   ├── preprocessor.py                     # Row → synthesised text block for LLM input
-│   ├── extractor.py                        # 4-step LLM extraction chain (ChatDatabricks)
+│   ├── extractor.py                        # LLM extraction chain + _GARBAGE_KEYWORDS filter
 │   ├── merger.py                           # Merges LLM outputs + CSV into facility_records
-│   └── fact_generator.py                   # Generates fact_text rows for Vector Search
+│   ├── geocoder.py                         # LocationIQ geocoder (rate-limited, 2 req/s)
+│   ├── location_resolver.py               # Gemini-powered city/region inference (14 RPM)
+│   └── facility_fact_generator.py          # Generates fact_text rows for Vector Search
 │
 ├── storage/                                # Database layer
 │   ├── __init__.py
 │   ├── database.py                         # DatabricksDatabase class (session + Delta I/O)
 │   └── models.py                           # PySpark StructType schemas for all tables
 │
-├── main.py                                 # Pipeline orchestrator (all 7 stages)
-├── requirements.txt                        # Python dependencies
+├── facility_record_generator.py            # Pipeline orchestrator (Stages 1–4)
+├── populate_facts.py                       # Standalone script — runs Stage 5 on all records
+├── compute_regional_insights.py            # Standalone script — runs Stage 6
 ├── .env                                    # Credentials & config (gitignored)
 └── README.md                               # This file
 ```
@@ -119,11 +131,11 @@ IDP/
 
 ### Stage 1 — Database Initialisation
 
-**File:** `main.py` (lines 52–59), `storage/database.py`
+**File:** `facility_record_generator.py`, `storage/database.py`
 
-The pipeline creates a `DatabricksDatabase` instance which lazily initialises a Spark session via **Databricks Connect**. It requires either `DATABRICKS_CLUSTER_ID` or `DATABRICKS_SERVERLESS=true` in `.env`. The session sets the default catalog and schema (e.g., `med_atlas_ai.default`).
+Creates a `DatabricksDatabase` instance which lazily initialises a Spark session via **Databricks Connect**. Requires either `DATABRICKS_CLUSTER_ID` or `DATABRICKS_SERVERLESS=true` in `.env`. The session sets the default catalog and schema from `CATALOG` and `SCHEMA` env vars (e.g., `med_atlas_ai_v2.default`).
 
-Schema registration happens at startup for all three output tables, but actual table creation is deferred until the first write operation.
+Schema registration happens at startup for all three output tables, but actual table creation is deferred until first write.
 
 ### Stage 2 — CSV Loading
 
@@ -134,233 +146,212 @@ Reads the raw CSV file using Pandas with `dtype=str` to preserve all data as str
 1. **Column name normalisation** — strips whitespace, replaces special characters with underscores, lowercases.
 2. **NULL token replacement** — converts `"null"`, `"None"`, `"N/A"`, `""`, and `NaN` values into Python `None`.
 
-Returns a `List[Dict[str, Any]]` where each dict is one CSV row.
+Returns a `List[Dict[str, Any]]` where each dict is one raw CSV row.
 
-### Stage 3 — Checkpointing
+### Stage 2b — Deduplication
 
-**File:** `main.py` (lines 69–110)
+**File:** `pipeline/deduplicator.py`
 
-Before processing, the pipeline reads all existing `facility_id` values from the `facility_records` table. Any CSV row whose `unique_id` (or `pk_unique_id`) already exists in `facility_records` is skipped.
+The raw CSV contains **987 rows** representing 797 unique facilities. The extra 190 rows are duplicates — the same facility scraped from multiple web sources, resulting in multiple rows sharing the same `pk_unique_id` but with complementary non-null data.
 
-The `MAX_PROCESS_ROWS` environment variable caps the total number of rows the pipeline will ever process (across all runs combined). This prevents runaway LLM costs during development.
+**How it works:** Rows are grouped by `pk_unique_id`. For each group, a single merged row is produced by taking, for each column, the first non-null value across duplicate rows. This ensures data captured from any source page for the same facility is preserved.
 
-### Stage 4 — LLM Extraction Chain
+After deduplication, `MAX_PROCESS_ROWS` (from `.env`) slices the 797 unique records to limit LLM cost per run.
+
+### Stage 3 — LLM Extraction Chain
 
 **File:** `pipeline/extractor.py`, `pipeline/preprocessor.py`
 
-**Step 4a: Text Synthesis (`preprocessor.py`)**
-Each CSV row is first converted into a structured text block by `synthesize_row_text()`. It iterates over all columns (skipping identity columns like `pk_unique_id`), formats non-null values as `"Field Name: value"` lines, and parses JSON arrays into bulleted lists. This synthesised text becomes the input to all 4 LLM calls.
+**Step 3a: Text Synthesis (`preprocessor.py`)**
+Each CSV row is converted into a structured text block by `synthesize_row_text()`. It iterates over all columns (skipping identity columns), formats non-null values as `"Field Name: value"` lines, and parses JSON arrays into bulleted lists.
 
-**Step 4b: 4-Step LLM Chain (`extractor.py`)**
-Uses `ChatDatabricks` (LangChain integration) pointed at a Databricks Model Serving endpoint (default: `databricks-meta-llama-3-1-70b-instruct`).
+**Step 3b: LLM Extraction (`extractor.py`)**
+Uses `ChatDatabricks` (LangChain integration) pointed at a Databricks Model Serving endpoint (configurable via `LLM_ENDPOINT`).
 
-| Step                           | Prompt Config                | Pydantic Output Model          | What It Extracts                                                                                                                                                                 |
-| ------------------------------ | ---------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ① Organization Extraction      | `organization_extraction.py` | `OrganizationExtractionOutput` | Facility names, NGO names, organisation description, mission statement                                                                                                           |
-| ② Facility Fact Extraction     | `free_form.py`               | `FacilityFacts`                | Procedures, equipment, capabilities (free-form medical facts)                                                                                                                    |
-| ③ Medical Specialty Extraction | `medical_specialties.py`     | `MedicalSpecialties`           | List of medical specialties                                                                                                                                                      |
-| ④ Facility Structured Info     | `facility_and_ngo_fields.py` | `Facility`                     | Address lines, city, state, country, phone numbers, email, websites, year established, capacity, number of doctors, volunteer status, affiliations, operator type, facility type |
+| Step | Prompt Config | Pydantic Output Model | What It Extracts |
+|------|--------------|----------------------|-----------------|
+| ① Facility Fact Extraction | `free_form.py` | `FacilityFacts` | Procedures, equipment, capabilities, specialties, cleaned facility name, description, mission statement |
 
-Each LLM call appends a JSON enforcement suffix to ensure valid JSON output. Responses are stripped of markdown code fences and parsed through Pydantic `model_validate_json`. Failed validation logs a warning and returns `None` for that step (the merge stage gracefully handles missing steps).
+Responses are stripped of markdown fences and parsed via Pydantic `model_validate_json`. Failed validation logs a warning and returns `None`.
 
-Rows are processed in parallel using `ThreadPoolExecutor` with configurable `MAX_WORKERS` (default: 4).
+**Capability Garbage Filtering:** After extraction, all array fields (especially `capabilities`) are passed through `_clean_array()` using the shared `_GARBAGE_KEYWORDS` list from `extractor.py`. This is a case-insensitive fuzzy-match filter that strips strings originating from directory listings, contact information, web scraper artifacts, and similar non-clinical noise (e.g., strings containing `"telephone"`, `"ghanaYello"`, `"listed in"`, `"registered with"`). If all items in an array are filtered, the field is stored as `null` — never as an empty list or raw garbage.
 
-### Stage 5 — Merge & Shape
+Rows are processed in parallel using `ThreadPoolExecutor` with configurable `MAX_WORKERS`.
+
+### Stage 4 — Merge & Shape
 
 **File:** `pipeline/merger.py`
 
-The `merge_extraction_results()` function consolidates the outputs of all 4 LLM extraction steps plus the original CSV row into a single flat dictionary matching `FACILITY_RECORDS_SCHEMA`.
+The `merge_extraction_results()` function consolidates the LLM extraction output plus the original CSV row into a single flat dictionary matching `FACILITY_RECORDS_SCHEMA`.
 
 **Merging Strategy:**
 
-- **Scalar fields** — uses `_first_non_null()` which returns the first non-None, non-empty value from a priority list. LLM extraction output is prioritised over raw CSV values.
-- **Array fields** — uses `_merge_arrays()` which concatenates multiple lists and deduplicates entries (case-insensitive) while preserving insertion order.
-- **State/Region inference** — includes a deterministic `_GHANA_CITY_REGION` lookup table (80+ cities mapped to their Ghana regions). If the LLM and CSV both fail to provide a region, the merger infers it from the city name.
+- **Scalar fields** — uses `_first_non_null()` which returns the first non-`None`, non-empty value from a priority list.
+- **Array fields** — uses `_merge_arrays()` which concatenates multiple lists and deduplicates entries (case-insensitive) while preserving insertion order. All arrays additionally pass through `_clean_array()` as a safety net.
 
-**Identity mapping:**
-The `facility_id` is set to the original CSV row's `unique_id` (or `pk_unique_id`). This allows the pipeline's checkpointing mechanism to match CSV rows against already-processed records.
+#### 5-Step Location Resolution Cascade
 
-### Stage 6 — Hybrid Fact Generation
+This is the most sophisticated part of the merge step. City and region (state) are resolved via a strict priority cascade:
 
-**File:** `pipeline/fact_generator.py`
+**Step 1 — Direct CSV values:** Take city and state directly from the deduplicated CSV row.
 
-This is the core of the **Hybrid RAG Strategy**. Instead of generating dozens of paraphrased rows per facility (which causes "vector crowding" in top_k retrieval), the pipeline generates a maximum of **5 rows per facility**.
+**Step 2 — Dictionary lookup:** If state is missing but city is present, attempt an exact then substring match against `_GHANA_CITY_REGION` — a hardcoded mapping of 100+ Ghanaian city names to their regions.
 
-#### How fact_text is generated
+**Step 3 — Gemini Case 1 (city known, region missing):** If the dictionary lookup also misses, call the `GeminiLocationResolver` with the known city name. Gemini infers the region using a full Ghana region→cities reference dictionary embedded in the prompt. It must return an exact match against the 16 valid Ghana region names.
 
-**Location String (`loc_str`):**
-Before generating any fact, the generator constructs a geographic context string from `city`, `state`, and `country`. Example: `" in Accra, Greater Accra Region, Ghana"`. If all three are null, the string is empty. This `loc_str` is injected into every fact_text to ensure the Vector Search can match geographic queries.
+**Step 4 — Gemini Case 2 (both city AND region missing):** If both city and state are absent, call Gemini with all available address lines. Gemini infers both city and region from facility name semantic cues and address fragments.
 
-**Array Fact Rows (up to 4 rows):**
+**Step 5 — LocationIQ Geocoder:** After city and state are fully resolved by the steps above, call `FacilityGeocoder` (LocationIQ API) to convert the full address string into `latitude` and `longitude`. It tries progressively degraded address queries until a result is found, or stores `null` if all queries fail.
 
-For each of the 4 array fields in `facility_records`, the generator creates exactly **one** consolidated sentence per fact_type. If the array is empty or null, the row is silently skipped.
+**Rate Limiting:**
+- **Gemini:** A module-level `StrictThrottle(14)` singleton enforces exactly one Gemini call every `60/14 ≈ 4.28 seconds` across all concurrent workers. The lock is acquired before each call, so workers queue single-file rather than bursting. This prevents Google's 15 RPM rolling-window quota from being exceeded.
+- **LocationIQ:** A global `threading.Lock` with `time.sleep(0.5)` enforces a maximum of 2 requests/second across all workers on the free tier.
 
-| fact_type    | Source Column in facility_records | Template                                                                     | Example fact_text                                                                                                                                                |
-| ------------ | --------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `procedure`  | `procedures` (Array)              | `"{facility}{location} provides the following medical procedures: {items}."` | `"1st Foundation Clinic in Accra, Greater Accra Region, Ghana provides the following medical procedures: bloodTransfusion, woundSuturing."`                      |
-| `equipment`  | `equipment` (Array)               | `"{facility}{location} is equipped with: {items}."`                          | `"WAAF in Takoradi, Western Region, Ghana is equipped with: ultrasoundMachine, xRayMachine."`                                                                    |
-| `capability` | `capabilities` (Array)            | `"{facility}{location} has the following clinical capabilities: {items}."`   | `"3E Medical Center in Accra, Greater Accra Region, Ghana has the following clinical capabilities: Offers 24-hour medical services, Offers inpatient services."` |
-| `specialty`  | `specialties` (Array)             | `"{facility}{location} offers specialty care in: {items}."`                  | `"Ahmadiyya Hospital in Kumasi, Ashanti Region, Ghana offers specialty care in: internalMedicine, familyMedicine."`                                              |
+### Stage 5 — Hybrid Fact Generation
 
-All items in the array are comma-joined into a single string. Empty strings and whitespace-only items are stripped out before joining.
+**File:** `pipeline/facility_fact_generator.py` | **Run via:** `populate_facts.py`
 
-**Summary Fact Row (exactly 1 row):**
+This is the core of the **Hybrid RAG strategy**. The pipeline generates a maximum of **6 rows per facility** to prevent "vector crowding" in top-k retrieval.
 
-All scalar fields are consolidated into a single rich paragraph. The summary is constructed by conditionally appending sentence fragments (only if the source data exists). The following fields from `facility_records` contribute to the summary:
+#### Location String (`loc_str`)
 
-| Field                                             | How it appears in the summary                                                          |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `facility_name`                                   | Always present — leads the sentence                                                    |
-| `operator_type`                                   | `"privately operated"` / `"publicly operated"` prefix                                  |
-| `facility_type`                                   | Type label (e.g., `"clinic"`, `"hospital"`)                                            |
-| `city`, `state`, `country`                        | Geographic location via `loc_str`                                                      |
-| `address_line1`, `address_line2`, `address_line3` | `"It is physically located at [full address]."` — only non-null lines are concatenated |
-| `capacity`                                        | `"an inpatient capacity of X beds."`                                                   |
-| `year_established`                                | `"Established in YYYY."`                                                               |
-| `accepts_volunteers`                              | `"It actively accepts clinical volunteers."` (only if `True`)                          |
-| `affiliation_types`                               | `"It is affiliated with the following types: X, Y."`                                   |
-| `mission_statement`                               | `"Its mission statement is: ..."`                                                      |
-| `description`                                     | `"Description: ..."`                                                                   |
+Before generating any fact, a geographic context string is built from `city`, `state`, and `country`. Example: `" in Accra, Greater Accra, Ghana"`. This is injected into every `fact_text` to enable geographic similarity matching without structured filters.
 
-**Example Summary fact_text:**
+#### Fact Types Generated
 
-```
-"WAAF is a privately operated clinic in Takoradi, Western Region, Ghana.
- It is physically located at 123 Main Street, Suite 4B.
- It has an inpatient capacity of 40 beds.
- Established in 2005. It actively accepts clinical volunteers.
- Its mission statement is: To provide quality healthcare to the people of Western Ghana."
-```
+| `fact_type`   | Source Fields                                  | Content                                                                                     |
+|---------------|------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `summary`     | `operator_type`, `facility_type`, `org_type`, `city`, `state`, `country`, `affiliation_types` | Identity-focused sentence: who, what type, where, affiliation. **Does NOT include description or mission.** |
+| `description` | `description`, `mission_statement`             | Narrative sentence: background, purpose, and mission of the facility.                       |
+| `procedure`   | `procedures` (Array)                            | `"{facility}{location} provides the following medical procedures: {items}."`                |
+| `equipment`   | `equipment` (Array)                             | `"{facility}{location} is equipped with: {items}."`                                         |
+| `capability`  | `capabilities` (Array)                          | `"{facility}{location} has the following clinical capabilities: {items}."`                  |
+| `specialty`   | `specialties` (Array)                           | `"{facility}{location} offers specialty care in: {items}."`                                 |
 
-**Missing Data Handling:**
-If a field is `None`, empty, or missing, the corresponding sentence fragment is silently omitted. The word "Unknown" or "null" is **never** inserted into any fact_text. If an entire array is empty, no row is generated for that fact_type. This prevents the Vector DB from returning false positives on pattern-matched "unknown" strings.
+**Why `summary` and `description` are separate:** The `summary` fact is optimised purely for identity/type/affiliation matching ("find all private clinics in Ashanti"). The `description` fact is optimised for narrative/mission matching ("find facilities focused on maternal care"). Keeping them separate means the vector index retrieves the right signal for each query intent without noise from the other.
 
-### Stage 7 — Regional Insights Aggregation
+**Missing Data Handling:** If a field is `None` or empty, the corresponding row is silently skipped. The words "Unknown" and "null" are **never** inserted into any `fact_text`. If `description` and `mission_statement` are both null, no `description` row is generated.
 
-**File:** `main.py` (function `_compute_regional_insights()`)
+#### Execution Model
 
-This stage builds a multi-dimensional analytics table using PySpark aggregations on `facility_records`. The table is designed exclusively for **Text-to-SQL** querying (via Databricks Genie or a LangGraph SQL tool) — it is NOT injected into the Vector DB.
+`populate_facts.py` runs Stage 5 as a standalone script. It reads **all** rows from `facility_records` into memory, generates all facts, then performs a **single overwrite** to `facility_facts` at the end. There is no checkpointing or batched intermediate writes — this guarantees the final table always reflects the complete output.
 
-**Six aggregation dimensions:**
+### Stage 6 — Regional Insights Aggregation
 
-| #   | insight_category | insight_value                | What is grouped                   | facility_count   | total_capacity   |
-| --- | ---------------- | ---------------------------- | --------------------------------- | ---------------- | ---------------- |
-| 1   | `overview`       | `all_facilities`             | All facilities in a region        | ✅ countDistinct | ✅ SUM(capacity) |
-| 2   | `operator`       | e.g. `"public"`, `"private"` | Facilities by operator_type       | ✅ countDistinct | ✅ SUM(capacity) |
-| 3   | `specialty`      | e.g. `"cardiology"`          | Facilities by exploded specialty  | ✅ countDistinct | NULL\*           |
-| 4   | `procedure`      | e.g. `"openHeartSurgery"`    | Facilities by exploded procedure  | ✅ countDistinct | NULL\*           |
-| 5   | `equipment`      | e.g. `"mriMachine"`          | Facilities by exploded equipment  | ✅ countDistinct | NULL\*           |
-| 6   | `capability`     | e.g. `"24-hour services"`    | Facilities by exploded capability | ✅ countDistinct | NULL\*           |
+**File:** `compute_regional_insights.py`
 
-_\*`total_capacity` is explicitly set to `NULL` for array-based dimensions to prevent statistical overcounting. A hospital with 50 beds and 3 specialties would otherwise contribute 150 phantom beds to the totals._
+Builds a multi-dimensional analytics table using PySpark aggregations on `facility_records`. Designed exclusively for **Text-to-SQL** (via Databricks Genie) — **NOT** injected into the Vector DB.
 
-**Array Explosion Logic:**
-For array columns (specialties, procedures, equipment, capabilities), PySpark's `explode_outer()` is used to create one row per array item, followed by `groupBy(country, state, city, item)` and `countDistinct(facility_id)`. This guarantees that each facility is counted exactly once per specialty/procedure/equipment/capability even if duplicate entries exist in the source data.
+**Three aggregation dimensions:**
+
+| # | `insight_category` | `insight_value` | What is grouped | `facility_count` | `total_capacity` | `total_doctors` |
+|---|--------------------|-----------------|-----------------|-----------------|-----------------|-----------------|
+| 1 | `overview` | `all_facilities` | All facilities per region/city | ✅ countDistinct | ✅ SUM | ✅ SUM |
+| 2 | `operator` | `public` / `private` | Facilities by operator_type | ✅ countDistinct | ✅ SUM | ✅ SUM |
+| 3 | `specialty` | e.g. `"cardiology"` | Facilities per specialty | ✅ countDistinct | `null`* | `null`* |
+
+*`total_capacity` and `total_doctors` are explicitly `NULL` for the `specialty` dimension to prevent statistical overcounting (a hospital with 3 specialties would otherwise contribute its bed count × 3).
+
+**Geographic dimensions:** Each aggregation row covers both state-level totals (when `city IS NULL`) and city-level breakdowns (when `city IS NOT NULL`). This allows Genie to answer both "how many facilities in Greater Accra?" and "how many facilities in Accra city?" accurately from the same table.
 
 ---
 
 ## Output Delta Tables
 
-### 1. `facility_records` — The Master Structured Table
+### 1. `facility_records` — Master Structured Table
 
-The single source of truth for all facility data. Each row represents one healthcare facility.
+Each row is one unique healthcare facility. Written by `facility_record_generator.py` as a **full overwrite** at the end of each run — all rows processed in that run are written simultaneously.
 
-| Column               | Type                | Nullable | Description                                                               |
-| -------------------- | ------------------- | -------- | ------------------------------------------------------------------------- |
-| `facility_id`        | String              | No       | Primary key — set to the original CSV row's `unique_id` for checkpointing |
-| `facility_name`      | String              | No       | Name of the healthcare facility                                           |
-| `organization_type`  | String              | No       | Type of organisation (`"facility"`, `"ngo"`, etc.)                        |
-| `specialties`        | Array[String]       | Yes      | Medical specialties offered (e.g., `["cardiology", "oncology"]`)          |
-| `procedures`         | Array[String]       | Yes      | Medical procedures performed (e.g., `["bloodTransfusion"]`)               |
-| `equipment`          | Array[String]       | Yes      | Medical equipment available (e.g., `["ultrasoundMachine"]`)               |
-| `capabilities`       | Array[String]       | Yes      | Clinical capabilities (e.g., `["24-hour services"]`)                      |
-| `address_line1`      | String              | Yes      | Street address line 1                                                     |
-| `address_line2`      | String              | Yes      | Street address line 2                                                     |
-| `address_line3`      | String              | Yes      | Street address line 3                                                     |
-| `city`               | String              | Yes      | City name (e.g., `"Accra"`)                                               |
-| `state`              | String              | Yes      | State or region (e.g., `"Greater Accra Region"`)                          |
-| `country`            | String              | Yes      | Country name (e.g., `"Ghana"`)                                            |
-| `country_code`       | String              | Yes      | ISO country code (e.g., `"GH"`)                                           |
-| `phone_numbers`      | Array[String]       | Yes      | Contact phone numbers                                                     |
-| `email`              | String              | Yes      | Primary email address                                                     |
-| `websites`           | Array[String]       | Yes      | Associated websites                                                       |
-| `social_links`       | Map[String, String] | Yes      | Dictionary mapping platforms to URLs (e.g., `{"facebookLink": "url"}`)    |
-| `officialWebsite`    | String              | Yes      | Official website URL                                                      |
-| `year_established`   | Integer             | Yes      | Year the facility was established                                         |
-| `accepts_volunteers` | Boolean             | Yes      | Whether the facility accepts clinical volunteers                          |
-| `capacity`           | Integer             | Yes      | Inpatient bed capacity                                                    |
-| `description`        | String              | Yes      | Facility description text                                                 |
-| `mission_statement`  | String              | Yes      | Organisation mission statement                                            |
-| `affiliation_types`  | Array[String]       | Yes      | Affiliation type IDs                                                      |
-| `operator_type`      | String              | Yes      | Operator type (`"public"`, `"private"`, etc.)                             |
-| `facility_type`      | String              | Yes      | Facility classification (`"clinic"`, `"hospital"`, etc.)                  |
-| `created_at`         | Timestamp           | Yes      | Record creation timestamp (UTC)                                           |
-| `updated_at`         | Timestamp           | Yes      | Record last update timestamp (UTC)                                        |
+| Column | Type | Description |
+|--------|------|-------------|
+| `facility_id` | String (PK) | Set from CSV `unique_id` / `pk_unique_id` |
+| `facility_name` | String | Official name of the facility |
+| `organization_type` | String | `"facility"` or `"ngo"` |
+| `specialties` | Array[String] | Medical specialties offered |
+| `procedures` | Array[String] | Medical procedures performed |
+| `equipment` | Array[String] | Medical equipment available |
+| `capabilities` | Array[String] | Clinical capabilities (garbage-filtered) |
+| `address_line1/2/3` | String | Street address components |
+| `city` | String | City/town |
+| `state` | String | Ghana region (e.g., `"Greater Accra"`) |
+| `country` | String | Always `"Ghana"` |
+| `country_code` | String | ISO code (e.g., `"GH"`) |
+| `latitude` | Double | Geocoded latitude (null if unresolvable) |
+| `longitude` | Double | Geocoded longitude (null if unresolvable) |
+| `phone_numbers` | Array[String] | Contact numbers |
+| `email` | String | Contact email |
+| `websites` | Array[String] | Associated URLs |
+| `social_links` | Map[String,String] | Platform → URL mapping |
+| `officialWebsite` | String | Primary homepage |
+| `year_established` | Integer | Year founded |
+| `accepts_volunteers` | Boolean | Accepts volunteers |
+| `capacity` | Integer | Bed capacity |
+| `no_doctors` | Integer | Doctor count |
+| `description` | String | Narrative description of the facility |
+| `mission_statement` | String | Official mission statement |
+| `affiliation_types` | Array[String] | `philanthropy-legacy`, `academic`, `faith-tradition`, `government`, `community` |
+| `operator_type` | String | `"public"` or `"private"` |
+| `facility_type` | String | `"clinic"`, `"hospital"`, `"farmacy"`, `"doctor"`, `"dentist"` |
+| `created_at` | Timestamp | Record creation time (UTC) |
+| `updated_at` | Timestamp | Record last update time (UTC) |
 
 ### 2. `facility_facts` — Vector Search / RAG Table
 
-Optimised for embedding and semantic retrieval. Each row contains a single, self-contained natural language sentence that can be independently embedded and searched. A downstream embedding step generates vector representations of the `fact_text` column, which are stored in a Vector Search index.
+Optimised for embedding and semantic retrieval. Written by `populate_facts.py` as a **full overwrite** — every run regenerates the complete table from all current `facility_records`.
 
-| Column        | Type   | Nullable | Description                                                                               |
-| ------------- | ------ | -------- | ----------------------------------------------------------------------------------------- |
-| `fact_id`     | String | No       | Unique identifier (UUID) for this fact row                                                |
-| `facility_id` | String | No       | Foreign key → `facility_records.facility_id`                                              |
-| `fact_text`   | String | No       | The natural language sentence to be embedded and searched                                 |
-| `fact_type`   | String | No       | Category tag: `"summary"`, `"procedure"`, `"equipment"`, `"capability"`, or `"specialty"` |
-| `source_text` | String | Yes      | The raw source data that was used to generate this fact_text                              |
+| Column | Type | Description |
+|--------|------|-------------|
+| `fact_id` | String (PK) | UUID for this fact row |
+| `facility_id` | String (FK) | → `facility_records.facility_id` |
+| `fact_text` | String | Natural language sentence to be embedded |
+| `fact_type` | String | `"summary"`, `"description"`, `"procedure"`, `"equipment"`, `"capability"`, or `"specialty"` |
 
-**Row count per facility:** Maximum 5 rows (1 summary + up to 4 array types). If a facility has no procedures, no procedure row is generated. Minimum is 1 row (the summary).
+**Maximum 6 rows per facility.** The `fact_type` metadata column enables precise filtered Vector Search: an agent querying for `"MRI equipment"` can filter `fact_type = "equipment"` to retrieve only equipment facts, eliminating false-positive matches from summary or description text.
 
-**Why this structure matters for Vector Search:**
+### 3. `regional_insights` — Text-to-SQL / Genie Analytics Table
 
-- The `fact_type` column enables **metadata filtering** in the Vector Search index. An agent can search for `query="MRI machine" + filter={"fact_type": "equipment"}` to guarantee zero noise from description or procedure texts.
-- Each `fact_text` is geographically contextualised (city, state, country are embedded in the sentence), enabling geographic similarity matching without structured SQL.
+Pre-aggregated analytics designed for Databricks Genie (Text-to-SQL). Contains **only 3 insight categories** (`overview`, `operator`, `specialty`).
 
-### 3. `regional_insights` — Text-to-SQL / BI Analytics Table
+| Column | Type | Description |
+|--------|------|-------------|
+| `country` | String | Grouping dimension — always `"Ghana"` |
+| `state` | String | Grouping dimension — Ghana region |
+| `city` | String | Grouping dimension — null means state-level total |
+| `insight_category` | String | `"overview"`, `"operator"`, or `"specialty"` |
+| `insight_value` | String | `"all_facilities"` / `"public"` / `"private"` / specialty name |
+| `facility_count` | Integer | Distinct facilities in this slice |
+| `total_capacity` | Integer | SUM of bed capacity (null for specialty rows) |
+| `total_doctors` | Integer | SUM of doctor counts (null for specialty rows) |
 
-A pre-aggregated multi-dimensional analytics table designed for precise quantitative queries via Text-to-SQL. This table is **NOT** used for vector search.
-
-| Column                      | Type          | Nullable | Description                                                                                             |
-| --------------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `country`                   | String        | Yes      | Country (grouping dimension)                                                                            |
-| `state`                     | String        | Yes      | State/Region (grouping dimension)                                                                       |
-| `city`                      | String        | Yes      | City (grouping dimension)                                                                               |
-| `insight_category`          | String        | No       | Dimension type: `"overview"`, `"operator"`, `"specialty"`, `"procedure"`, `"equipment"`, `"capability"` |
-| `insight_value`             | String        | No       | Dimension value (e.g., `"all_facilities"`, `"cardiology"`, `"public"`, `"mriMachine"`)                  |
-| `facility_count`            | Integer       | Yes      | Number of distinct facilities matching this dimension                                                   |
-| `total_capacity`            | Integer       | Yes      | Sum of bed capacity (only for `overview` and `operator` categories; NULL otherwise)                     |
-| `contributing_facility_ids` | Array[String] | Yes      | List of facility_ids contributing to this aggregate                                                     |
-
-**Example SQL queries this table enables:**
+**Example Genie SQL queries:**
 
 ```sql
--- "How many total hospital beds are in Greater Accra?"
-SELECT total_capacity FROM regional_insights
-WHERE state = 'Greater Accra Region' AND insight_category = 'overview';
-
--- "How many facilities in Western Region perform blood transfusions?"
+-- "How many hospitals are in Accra?"
 SELECT facility_count FROM regional_insights
-WHERE state = 'Western Region' AND insight_category = 'procedure'
-  AND insight_value = 'bloodTransfusion';
+WHERE city = 'Accra' AND insight_category = 'overview';
 
--- "Compare public vs private hospital capacity in Kumasi"
-SELECT insight_value, facility_count, total_capacity
+-- "Compare public vs private facilities in Ashanti"
+SELECT insight_value, facility_count, total_capacity, total_doctors
 FROM regional_insights
-WHERE city = 'Kumasi' AND insight_category = 'operator';
+WHERE state = 'Ashanti' AND insight_category = 'operator';
+
+-- "Which regions have the most ophthalmology facilities?"
+SELECT state, facility_count FROM regional_insights
+WHERE insight_category = 'specialty' AND insight_value = 'ophthalmology'
+ORDER BY facility_count DESC;
 ```
 
 ---
 
 ## Dual Retrieval Architecture
 
-The pipeline produces data for **two distinct retrieval strategies**, used by the downstream LangGraph agent:
-
-| Query Type                     | Retrieval Method         | Table Used                            | Example Query                                                                                                      |
-| ------------------------------ | ------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Semantic / Qualitative**     | Vector Search (RAG)      | `facility_facts`                      | _"Find clinics near Accra that do cardiac surgery"_                                                                |
-| **Quantitative / Statistical** | Text-to-SQL (Genie)      | `regional_insights`                   | _"How many hospitals in Western Region have MRI machines?"_                                                        |
-| **Facility Lookup**            | Direct SQL or RAG        | `facility_records` / `facility_facts` | _"What services does Korle Bu Teaching Hospital offer?"_                                                           |
-| **Anomaly Detection**          | Agent-side LLM reasoning | Both tables                           | _"Which clinics claim surgeries but have no beds?"_ → Agent cross-references procedure facts against summary facts |
+| Query Type | Retrieval Method | Table Used | Example Query |
+|------------|-----------------|------------|---------------|
+| **Semantic / Qualitative** | Vector Search (RAG) | `facility_facts` | *"Find clinics near Accra that do cardiac surgery"* |
+| **Narrative / Mission** | Vector Search (RAG) | `facility_facts` (fact_type=`description`) | *"Find facilities focused on maternal and child health"* |
+| **Quantitative / Statistical** | Text-to-SQL (Genie) | `regional_insights` | *"How many public hospitals are in Ashanti?"* |
+| **Facility Lookup** | Direct SQL or RAG | `facility_records` / `facility_facts` | *"What services does Korle Bu Teaching Hospital offer?"* |
+| **Anomaly Detection** | Agent-side LLM reasoning | Both tables | *"Which clinics claim surgeries but have no beds?"* |
 
 ---
 
@@ -371,13 +362,15 @@ Create a `.env` file in the `IDP/` directory:
 ```env
 DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 DATABRICKS_TOKEN=dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-DATABRICKS_CLUSTER_ID=your-cluster-id          # OR set DATABRICKS_SERVERLESS=true
-CATALOG=med_atlas_ai
+DATABRICKS_SERVERLESS=true                  # OR set DATABRICKS_CLUSTER_ID
+CATALOG=med_atlas_ai_v2
 SCHEMA=default
 CSV_PATH=Virtue Foundation Ghana v0.3 - Sheet1.csv
 LLM_ENDPOINT=databricks-meta-llama-3-1-70b-instruct
-MAX_WORKERS=4                                   # Parallel extraction threads
-MAX_PROCESS_ROWS=100                            # Cap total processed rows (across all runs)
+MAX_WORKERS=6                               # Parallel extraction threads
+MAX_PROCESS_ROWS=797                        # Max unique rows to process per run (max = 797)
+GEMINI_API_KEY=AIzaXXXXXXXXXXXXXXXXXXXXX   # For Gemini location resolver (15 RPM free tier)
+LOCATION_IQ_ACCESS_TOKEN=pk.XXXXXXXX       # For LocationIQ geocoding (2 req/s free tier)
 ```
 
 ---
@@ -386,32 +379,41 @@ MAX_PROCESS_ROWS=100                            # Cap total processed rows (acro
 
 ```bash
 # 1. Create virtual environment
-python -m venv .venv
+uv venv
 source .venv/bin/activate
 
 # 2. Install dependencies
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
-# 3. Configure .env with your Databricks credentials (see above)
+# 3. Configure .env (see above)
 
-# 4. Run the full pipeline
-python main.py
+# 4. Run Stage 1–4: Extract & save facility_records
+uv run facility_record_generator.py
+
+# 5. Run Stage 5: Generate facility_facts from all records
+uv run populate_facts.py
+
+# 6. Run Stage 6: Compute regional_insights aggregations
+uv run compute_regional_insights.py
 ```
 
-The pipeline is **idempotent** — running it multiple times will only process new rows that haven't been checkpointed. To reprocess all data, drop the `facility_records` table in Databricks first.
+Each script is **idempotent via full overwrite** — re-running any script will completely regenerate its target table from scratch. There is no checkpointing. To process more rows, increase `MAX_PROCESS_ROWS` in `.env` and re-run `facility_record_generator.py`.
 
 ---
 
 ## Key Design Decisions
 
-| Decision                                        | Rationale                                                                                                                                                                                      |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hybrid fact generation (≤5 rows/facility)**   | Prevents "vector crowding" where top_k=10 returns 10 rows about the same hospital. Each row is semantically dense and independently useful.                                                    |
-| **No "Unknown" or "null" in fact_text**         | If data is missing, the row is silently skipped. This prevents the Vector DB from returning false-positive matches on the word "unknown".                                                      |
-| **Geographic context in every fact_text**       | City, state, and country are embedded directly in the sentence (e.g., `"in Accra, Greater Accra Region, Ghana"`). This enables geographic similarity matching without structured filters.      |
-| **regional_insights uses Text-to-SQL, not RAG** | Vector Search is mathematically unreliable for counting, ranking, and aggregation. Text-to-SQL gives exact, provably correct quantitative answers.                                             |
-| **Overcounting prevention**                     | `total_capacity` is NULL for array-based insight categories (specialty, procedure, equipment, capability) to prevent a single hospital's metrics from being multiplied across its specialties. |
-| **facility_id = CSV unique_id**                 | Eliminates the need for a separate `source_row_id` column. Enables idempotent checkpointing by comparing CSV row IDs against existing `facility_id`s.                                          |
-| **Deterministic Ghana region inference**        | A 80+ entry city→region lookup table in `merger.py` ensures consistent region assignment even when the LLM fails to extract the state/region.                                                  |
-| **One LLM call per row, no cross-row batching** | Prevents cross-contamination where the LLM conflates data from different facilities within a single prompt.                                                                                    |
-| **Schema evolution via mergeSchema**            | Delta table writes use `.option("mergeSchema", "true")` to gracefully handle schema additions across pipeline iterations without requiring table drops.                                        |
+| Decision | Rationale |
+|----------|-----------|
+| **`summary` and `description` are separate fact_types** | `summary` is optimised for identity/type/affiliation matching. `description` is optimised for narrative/mission tone matching. Separating them prevents cross-contamination in top-k retrieval and allows the agent to filter by intent. |
+| **No "Unknown" or "null" in `fact_text`** | If data is missing, the row is silently skipped. This prevents the Vector DB from returning false-positive matches on the word "unknown". |
+| **Geographic context in every `fact_text`** | City, state, and country are embedded directly in every sentence. This enables geographic similarity matching without structured filters. |
+| **5-step location cascade (dict → Gemini → LocationIQ)** | Deterministic lookup is free and instant; Gemini only fires for edge cases. LocationIQ is called last — only for lat/lon — so its quota is protected. This gives maximum coverage with minimum cost. |
+| **`StrictThrottle` over Token Bucket for Gemini** | A Token Bucket allows bursty firing (all 6 workers immediately consume tokens). Google's quota is a strict 60-second rolling window that punishes bursts. `StrictThrottle` enforces one call every 4.28s across all workers, which is mathematically guaranteed to stay under 15 RPM regardless of concurrency. |
+| **`_GARBAGE_KEYWORDS` as a shared constant** | Both `extractor.py` and `merger.py` import the same list. This guarantees consistent cleaning behaviour at both the extraction stage (first pass) and the merge stage (safety-net second pass). |
+| **Deduplication preserves complementary data** | Multiple scraped rows for the same facility often have complementary non-null fields. Merging them column-by-column (first non-null wins per field) maximises information density per facility instead of arbitrarily picking one row. |
+| **Single final overwrite at run end** | Mid-run batched overwrites with `mode="overwrite"` silently destroy earlier batches. Writing once at the end guarantees all processed rows appear in the final table. |
+| **`regional_insights` uses Text-to-SQL, not RAG** | Vector Search is mathematically unreliable for counting, ranking, and aggregation. Text-to-SQL gives exact, provably correct quantitative answers. |
+| **Overcounting prevention in `regional_insights`** | `total_capacity` and `total_doctors` are `NULL` for array-based dimensions (specialty) to prevent a single hospital's metrics from being multiplied across its specialties. |
+| **`facility_id = CSV pk_unique_id`** | Eliminates the need for a separate `source_row_id`. The deduplicator guarantees exactly one merged row per `pk_unique_id`, so this ID is stable and collision-free. |
+| **Three separate runner scripts** | `facility_record_generator.py`, `populate_facts.py`, and `compute_regional_insights.py` are fully independent. This allows any single stage to be re-run in isolation without triggering expensive LLM extraction again. |

@@ -6,77 +6,74 @@ Our architecture is built on a **Hybrid Reasoning Engine** philosophy: **"SQL fo
 
 ---
 
-## 🧠 1. Agent Architecture & Query Routing
+## 1. Agent Architecture & Query Routing
 
 Queries are intercepted by our LangChain agent (`agent.py`) and routed dynamically based on natural language intent:
 
 1. **Quantitative / Ad-hoc Queries (`IS_QUANTITATIVE`)**:
-   - _Example:_ "How many hospitals are in Accra?"
-   - _Router:_ **Databricks Genie (`genie_chat_tool`)**
-   - _Logic:_ Translates natural language to SQL on the fly to count/aggregate clean schema data.
+   - Example: "How many hospitals are in Accra?"
+   - Router: **Databricks Genie (`genie_chat_tool`)**
+   - Logic: Translates natural language to SQL on the fly to count/aggregate clean schema data.
 2. **Structural / Analytic Queries (`IS_ANALYTIC`)**:
-   - _Example:_ "Which facilities have suspicious overclaims for surgery?"
-   - _Router:_ **Medical Agent Engine (`medical_agent_tool`)** or **Geospatial Engine**
-   - _Logic:_ Executes highly optimized, pre-computed pure-SQL branches for anomaly detection and geospatial clustering within Unity Catalog.
-
+   - Example: "Which facilities have suspicious overclaims for surgery?"
+   - Router: **Medical Agent Engine (`medical_agent_tool`)** or **Geospatial Engine**
+   - Logic: Executes highly optimized, pre-computed pure-SQL branches for anomaly detection and geospatial clustering within Unity Catalog.
 3. **Semantic / Knowledge Queries (`IS_SEMANTIC`)**:
-   - _Example:_ "What are the standard guidelines for setting up a rural clinic?"
-   - _Router:_ **Vector Search (`document_retrieval_tool`)**
-   - _Logic:_ Performs RAG against standard healthcare documentation.
-
-4. **Out-of-Scope (`IS_OUT_OF_SCOPE`)**:
-   - _Logic:_ Blocked natively via system prompt refusal.
+   - Example: "Which facilities provide cardiac surgery?"
+   - Router: **Vector Search (`vector_search_tool`)**
+   - Logic: Performs semantic similarity search over pre-generated facility facts stored in the `facility_facts` table.
+4. **Geospatial Queries (`IS_GEOSPATIAL`)**:
+   - Example: "Find clinics within 30 km of Kumasi."
+   - Router: **Geospatial Engine (`geospatial_query_tool`)**
+   - Logic: Executes ST_DistanceSpheroid calculations on the WGS84 spheroid via a Unity Catalog SQL function.
+5. **Out-of-Scope**:
+   - Logic: Blocked natively via system prompt refusal.
 
 ---
 
-## 🔬 2. The Medical Agent Engine (`setup_uc_function.sql`)
+## 2. The Medical Agent Engine (`setup_uc_function.sql`)
 
-This pure-SQL Unity Catalog function (`med_atlas_ai.default.analyze_medical_query`) handles complex anomaly detection and gap analysis. It contains 7 distinct logic branches. **All branches operate exclusively on `facility_records`** — no joins against the high-volume `facility_facts` table.
+This pure-SQL Unity Catalog function (`med_atlas_ai.default.analyze_medical_query`) handles complex anomaly detection and gap analysis. It contains **5 distinct logic branches**. All branches operate exclusively on `facility_records` — no joins against the high-volume `facility_facts` table. Branch dispatch is driven by `RLIKE` keyword matching on the `query` string passed from the agent.
 
-| Branch                             | Check                | Mechanism                                                                                                                                                                                                                                                                                |
-| ---------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1. Unmet Needs (Regional Gaps)** | Service Availability | Uses `ARRAY_EXCEPT` to find globally known medical specialties that are definitively missing from a specific region. Leaves free-text procedures/equipment to the LLM for semantic evaluation.                                                                                           |
-| **2. Duplicate Facilities**        | Data Integrity       | Identifies facilities with exact name matches clustered in the same region.                                                                                                                                                                                                              |
-| **3. Anomaly Flagging**            | Statistical Outliers | Applies 3-sigma (standard deviation) checks on capacity and doctor counts to flag extreme medical claims mathematically. Limited to top 20 outliers.                                                                                                                                     |
-| **4. Feature Mismatch**            | Plausibility         | Calculates the ratio of claimed procedures to available equipment using `size()` on arrays. Flags ratios > 5.0 for LLM review. Limited to top 35 results.                                                                                                                                |
-| **5. NGO Overlap**                 | Effort Duplication   | Identifies clusters of 2+ NGOs with the exact same mission/affiliation operating in the exact same city.                                                                                                                                                                                 |
-| **6. Problem Classification**      | Systemic Failure     | Uses `COALESCE(size(array), 0)` to count specialties/procedures/equipment per facility. Filters for facilities missing entire core pillars and asks the LLM to diagnose `equipment_gap`, `service_gap`, etc.                                                                             |
-| **7. Deep Validation**             | Consistency          | Region-scoped. SQL exports full facility profiles (specialties, procedures, equipment as comma-separated strings) with completeness tags. Python agent batches 8 facilities at a time through the LLM for medical consistency analysis. Requires `region` parameter; `city` is optional. |
+| Branch                             | Check                | Trigger Keywords                                                                                                                                     | Mechanism                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Unmet Needs (Regional Gaps)** | Service Availability | `unmet`, `gap`, `need`, `service gap`                                                                                                                | Uses `ARRAY_EXCEPT` to find globally known medical specialties definitively missing from a specific region. Returns `specialties_missing` as a pre-computed SQL list — these are confirmed gaps. Free-text procedures and equipment are returned as-is for LLM medical reasoning.                     |
+| **2. Anomaly Flagging**            | Statistical Outliers | `outlier`, `anomal`, `flag`, `unusual`, `inconsisten`, `signal`                                                                                      | Applies 3-sigma checks on capacity and doctor counts against a global baseline. Returns `plain_reason` fields describing each outlier in natural language. Caps at 100 results ordered by deviation magnitude.                                                                                        |
+| **3. Deep Validation**             | Consistency          | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `equipment count`, `infrastr`, `capable` | Region-scoped. SQL exports full facility profiles (specialties, procedures, equipment as comma-separated strings) with a `completeness` tag. Requires `region`, `facility_id`, or `facility_name`. Python agent batches **20 facilities at a time** through the LLM for medical consistency analysis. |
 
-### 📍 Geospatial Payload Enrichment
+### Geospatial Payload Enrichment
 
-All relevant SQL branches (Anomaly Flagging, Feature Mismatch, Problem Classification, Deep Validation) explicitly return `facility_id`, `latitude`, and `longitude` in their JSON output. This allows the frontend map to immediately pan to and highlight any facility the LLM mentions in its analysis.
+All SQL branches (Anomaly Flagging, Problem Classification, Deep Validation) explicitly return `facility_id`, `latitude`, and `longitude` in their JSON output. This allows the frontend map to immediately pan to and highlight any facility the LLM mentions in its analysis.
 
-### ⚠️ The Missing Data Philosophy (NULL vs Zero)
+### The Missing Data Philosophy (NULL vs Zero)
 
 A major design pillar of the Medical Agent Engine is explicitly preventing the LLM from hallucinating anomalies due to scraped data gaps.
 
-- The SQL differentiates between **`missing_data`** (the tool failed to scrape the equipment field, it is `NULL`) and **`true_zero`** (the tool scraped it and found nothing, or the user input 0).
-- Branches compute and pass a **`data_coverage_summary`** payload (e.g., _"We only have equipment data for 18% of facilities"_). The `SYSTEM_PROMPT` mandates that the LLM state these caveats honestly to the end-user rather than treating missing database fields as medical malpractice.
+- The SQL differentiates between **`missing_data`** (the field is `NULL` in the database — data was never collected) and **`true_zero`** (the field exists but has no entries — confirmed absence of capability).
+- Branches compute and return a **`data_coverage_summary`** payload (e.g., "We only have equipment data for 18% of facilities"). The system prompt mandates that the LLM state these caveats honestly to the user before listing any findings.
 
 ---
 
-## 🌍 3. The Geospatial Engine (`setup_geospatial.sql`)
+## 3. The Geospatial Engine (`setup_geospatial.sql`)
 
-Handles distance calculations and spatial clustering using `ST_DistanceSpheroid` (WGS84 spheroid) for sub-meter accuracy over standard Haversine calculations. It includes 3 branches:
+Handles distance calculations and spatial clustering using `ST_DistanceSpheroid` (WGS84 spheroid) for geodesic accuracy. The Python agent dynamically geocodes any reference location name (e.g., "Accra") via the LocationIQ API before invoking the UC function.
 
-1. **Nearby Analysis (`nearby`)**:
-   - Takes a reference lat/lon and `radius_km`.
-   - Returns all facilities within the radius, natively calculating the exact distance.
-2. **Cold Spot Analysis (`cold_spot`)**:
-   - Groups all facilities by geographic region (State/Country).
-   - Identifies regions that contain **zero** matching facilities for a requested medical condition.
-3. **Urban/Rural Gap Analysis (`urban_rural`)**:
-   - Takes a dynamic array of "Urban Hubs".
-   - Calculates the distance of every medical facility to its absolutely nearest provided hub, aiding in resource accessibility research.
+> **Why ST_DistanceSpheroid over Haversine?**
+> Standard formulas like Haversine calculate distance across a perfect sphere, which introduces an error rate of up to 0.5% (distorting distances by several kilometers over long routes). By utilizing Databricks's native `ST_DistanceSpheroid` traversing the WGS84 Reference Spheroid model, the engine accounts for the Earth's equatorial bulge to provide **sub-meter accuracy**, making it the gold standard for straight-line geospatial mapping.
 
-_Note: All geospatial branches return `facility_id`, `latitude`, and `longitude` natively, enabling immediate map rendering._
+It includes 3 analysis branches:
 
----
+**Nearby Analysis (`nearby`)**:
+
+- Takes a reference lat/lon and `radius_km`.
+- Returns all facilities within the radius sorted by ascending distance, with the exact `distance_km` per facility.
+- Supports an optional `condition` keyword which is matched against both `facility_facts.fact_text` (full-text) and `facility_records.specialties`/`procedures` arrays.
 
 ---
 
-## 🌐 4. Modular API Architecture (`ai_agent/api/`)
+---
+
+## 4. Modular API Architecture (`ai_agent/api/`)
 
 The server has been refactored into a scalable, modular structure to support both the LLM Agent and the Frontend Map UI.
 
@@ -92,15 +89,15 @@ The server has been refactored into a scalable, modular structure to support bot
 
 ---
 
-## 🗺️ 5. Map UI Backend API (`/map/`)
+## 5. Map UI Backend API (`/map/`)
 
 These endpoints power the interactive map interface for Ghana's healthcare infrastructure.
 
 ### `GET /map/metadata`
 
 - **Purpose**: Populates frontend filters (dropdowns, multi-selects).
-- **Dynamic Content**: Fetches all unique `state` (regions), `city` labels, and `specialties` directly from the database.
-- **Static Content**: Returns standardized lists for `facility_type`, `operator_type`, `organization_type`, and `affiliation_types`.
+- **Source**: All data is loaded entirely from a static `location.json` file co-located with the route. No SQL warehouse query is executed for this endpoint — the response is instantaneous.
+- **Content**: Returns `regions` (list), `cities_by_region` (map), `specialties` (list), `facility_types`, `operator_types`, `organization_types`, and `affiliation_types`.
 
 ### `POST /map/search`
 
@@ -122,13 +119,17 @@ These endpoints power the interactive map interface for Ghana's healthcare infra
   - **Advanced Array Filtering**: Uses `ARRAYS_OVERLAP` in SQL to efficiently filter multi-value fields like specialties.
   - **Count**: Returns a `count` field for the "Results Found" UI counter.
 
-### `GET /map/facility/{facility_id}`
+### `GET /map/facility/{identifier}`
 
-- **Purpose**: Fetches the complete medical profile for a single facility when clicked on the map.
+- **Purpose**: Fetches the complete medical profile for a single facility by ID or by name.
+- **Lookup Logic**: The `identifier` path parameter is matched against both `facility_id` (exact match) and `facility_name` (case-insensitive, with automatic whitespace normalization — multiple spaces are collapsed to a single space before comparison).
+- **Example URLs**:
+  - `GET /map/facility/fac-123-abc`
+  - `GET /map/facility/Korle-Bu%20Teaching%20Hospital`
 
 ---
 
-## 🧪 6. LLM Agent Endpoints
+## 6. LLM Agent Endpoints
 
 - **`POST /invoke`**: Primary endpoint for conversational AI interaction.
 - **`GET /health`**: Returns system status and tool availability.
@@ -136,7 +137,7 @@ These endpoints power the interactive map interface for Ghana's healthcare infra
 
 ---
 
-## 🗺️🤖 7. Map-LLM Integration (Two-Way Sync)
+## 7. Map-LLM Integration (Two-Way Sync)
 
 The architecture is uniquely designed to support **Two-Way Synchronization** between the Map UI and the Conversational Agent:
 
@@ -148,7 +149,7 @@ The architecture is uniquely designed to support **Two-Way Synchronization** bet
 
 ---
 
-## 💻 8. Local Development & Deployment
+## 8. Local Development & Deployment
 
 ### Implicit Authentication
 
