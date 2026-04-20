@@ -160,22 +160,3 @@ The API utilizes the **Databricks Default Credentials** chain. By calling `load_
 # Start the server (aliased via ai_agent.server for backwards compatibility)
 uv run uvicorn ai_agent.server:app --reload --port 8000
 ```
-
-### Applying SQL Updates
-
-Sync your analytic functions to Unity Catalog:
-
-```bash
-uv run python ai_agent/run_sql.py ai_agent/setup_uc_function.sql
-uv run python ai_agent/run_sql.py ai_agent/setup_geospatial.sql
-```
-
-### Deployment
-
-Deploy as a Databricks App or Model Serving endpoint:
-
-```bash
-uv run python ai_agent/deploy_agent.py
-```
-
-_(Check `databricks.yml` for environment-specific configurations.)_

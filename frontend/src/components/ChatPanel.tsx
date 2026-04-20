@@ -17,8 +17,9 @@ import { ChatMappedFacilitiesView } from './ChatMappedFacilitiesView';
 import type { AgentResponse, ExtractedMapMarker } from '../lib/types';
 
 const SUGGESTED_PROMPTS = [
-  'Show anomalies in Northern region',
+  'Which facilities have an unusually high breadth of claimed procedures relative to their stated/observed infrastructure signals (e.g.,200 procedures with minimal equipment list) in the Greater Accra region?',
   'Which facilities have MRI equipment?',
+  'How many hospitals in Greater Accra region have the ability to performs x-ray imaging. List their names and locations?',
   'Find clinics within 20km of Accra',
 ];
 
@@ -310,7 +311,7 @@ export function ChatPanel() {
                 <div className="text-[0.74rem] font-bold uppercase tracking-[0.2em] text-accent-700">
                   Assistant
                 </div>
-                <div className="text-sm text-ink-500">Med-Atlas AI copilot</div>
+                <div className="text-sm text-ink-500">MedAtlas AI copilot</div>
               </div>
             </div>
             <div className="flex items-center gap-1.5">

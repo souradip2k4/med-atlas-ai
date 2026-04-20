@@ -166,7 +166,7 @@ export function AdvancedFiltersModal({
         <div className="overflow-auto px-6 py-6">
           <div className="grid gap-7">
             <section>
-              <div className="mb-3 flex items-center gap-2 text-[0.8rem] uppercase tracking-[0.12em] text-ink-500">
+              <div className="mb-3 flex items-center gap-2 font-semibold text-ink-500">
                 <SlidersHorizontal className="size-4 text-accent-600" />
                 Facility Type
               </div>
@@ -190,7 +190,7 @@ export function AdvancedFiltersModal({
             </section>
 
             <section className="border-t border-t-border-header pt-6">
-              <div className="mb-3 text-[0.8rem] uppercase tracking-[0.12em] text-ink-500">
+              <div className="mb-3 flex items-center gap-2 font-semibold text-ink-500">
                 Operator Type
               </div>
               <div className="grid grid-cols-2 gap-3 max-[640px]:grid-cols-1">
@@ -213,7 +213,7 @@ export function AdvancedFiltersModal({
             </section>
 
             <section className="border-t border-t-border-header pt-6">
-              <div className="mb-3 text-[0.8rem] uppercase tracking-[0.12em] text-ink-500">
+              <div className="mb-3 flex items-center gap-2 font-semibold text-ink-500">
                 Organization
               </div>
               <div className="grid grid-cols-2 gap-3 max-[640px]:grid-cols-1">
@@ -236,7 +236,7 @@ export function AdvancedFiltersModal({
             </section>
 
             <section className="border-t border-t-border-header pt-6">
-              <div className="mb-1 text-[0.8rem] uppercase tracking-[0.12em] text-ink-500">
+              <div className="mb-3 flex items-center gap-2 font-semibold text-ink-500">
                 Affiliation Types
               </div>
               <p className="mb-4 text-[0.94rem] text-ink-500">

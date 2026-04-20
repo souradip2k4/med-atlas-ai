@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 .agents/
 .claude/
+.codex
 .env
 mlruns
 plans
+AGENTS.md

@@ -128,8 +128,8 @@ export function ResultsSidebar({
       }`}
     >
       <div className="mb-4 font-bold flex items-center justify-between gap-4">
-        <div className="items-center text-eyebrow uppercase tracking-[0.16em] text-accent-600">
-          Med-Atlas AI
+        <div className="items-center text-lg font-medium text-accent-600">
+          MedAtlas AI
         </div>
 
         <button

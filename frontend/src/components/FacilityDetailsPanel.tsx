@@ -135,7 +135,7 @@ export function FacilityDetailsPanel({
   const description =
     profile?.description ??
     preview?.description ??
-    'Detailed profile loaded. Fields without verified values are hidden to keep this view clean.';
+    'No available description data';
 
   const addressLines = profile ? getAddressLines(profile) : [];
   const locationParts = profile
@@ -160,15 +160,15 @@ export function FacilityDetailsPanel({
       <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-4 border-b border-b-border-header bg-surface-panel-strong px-3 pb-4 pt-5 shadow-overlay">
         <button
           type="button"
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-border-soft bg-surface-card-strong text-ink-700 shadow-inset-soft transition hover:border-border-highlight-soft hover:bg-surface-filter-strong hover:text-accent-700"
+          className="inline-flex size-11 shrink-0 items-center justify-center bg-surface-card-strong text-ink-700 rounded-full hover:bg-surface-filter-strong hover:text-accent-700"
           onClick={onClose}
         >
           <X className="size-[19px]" />
         </button>
 
         <div className="min-w-0 pr-2">
-          <div className="text-detail-badge uppercase tracking-[0.18em] text-accent-600">
-            Facility profile
+          <div className="text-lg font-medium text-accent-600">
+            Facility Profile
           </div>
           <h2 className="mt-1.5 break-words text-[1.06rem] font-semibold leading-tight text-ink-900">
             {displayName}

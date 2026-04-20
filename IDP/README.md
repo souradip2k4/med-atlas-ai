@@ -13,71 +13,71 @@ CSV File (Ghana healthcare facilities)
   │
   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 1 — Database Initialisation                                     │
-│  DatabricksDatabase connects via Databricks Connect.                   │
-│  Registers schemas for: facility_records, facility_facts,              │
-│  regional_insights.                                                    │
+│  Stage 1 — Database Initialisation                                       │
+│  DatabricksDatabase connects via Databricks Connect.                     │
+│  Registers schemas for: facility_records, facility_facts,                │
+│  regional_insights.                                                      │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 2 — CSV Loading (loader.py)                                     │
-│  Reads the raw CSV with Pandas into memory as List[Dict].              │
-│  Normalises column names, replaces NULL tokens with Python None.       │
+│  Stage 2 — CSV Loading (loader.py)                                       │
+│  Reads the raw CSV with Pandas into memory as List[Dict].                │
+│  Normalises column names, replaces NULL tokens with Python None.         │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 3 — Checkpointing                                               │
-│  Reads existing facility_ids from facility_records to skip             │
-│  already-processed rows. Respects MAX_PROCESS_ROWS budget.             │
+│  Stage 3 — Checkpointing                                                 │
+│  Reads existing facility_ids from facility_records to skip               │
+│  already-processed rows. Respects MAX_PROCESS_ROWS budget.               │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 4 — LLM Extraction Chain (extractor.py)                         │
-│  Each row is passed through 4 sequential LLM calls:                    │
-│    ① Organization Extraction → facility names, NGO names               │
-│    ② Facility Fact Extraction → procedures, equipment, capabilities    │
-│    ③ Medical Specialty Extraction → specialties list                   │
-│    ④ Facility Structured Info → address, contact, capacity, etc.       │
-│  Runs in parallel via ThreadPoolExecutor (configurable MAX_WORKERS).   │
+│  Stage 4 — LLM Extraction Chain (extractor.py)                           │
+│  Each row is passed through 4 sequential LLM calls:                      │
+│    ① Organization Extraction → facility names, NGO names                 |
+│    ② Facility Fact Extraction → procedures, equipment, capabilities      │
+│    ③ Medical Specialty Extraction → specialties list                     │
+│    ④ Facility Structured Info → address, contact, capacity, etc.         │
+│  Runs in parallel via ThreadPoolExecutor (configurable MAX_WORKERS).     │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 5 — Merge & Shape (merger.py)                                   │
-│  Consolidates all 4 LLM outputs + original CSV row into a single      │
-│  flat dict matching FACILITY_RECORDS_SCHEMA.                           │
-│  Uses _first_non_null() for scalars, _merge_arrays() for lists.       │
-│  Includes deterministic Ghana city→region lookup fallback.             │
-│  Output → facility_records Delta table                                 │
+│  Stage 5 — Merge & Shape (merger.py)                                     │
+│  Consolidates all 4 LLM outputs + original CSV row into a single         │
+│  flat dict matching FACILITY_RECORDS_SCHEMA.                             │
+│  Uses _first_non_null() for scalars, _merge_arrays() for lists.          │
+│  Includes deterministic Ghana city→region lookup fallback.               │
+│  Output → facility_records Delta table                                   │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 6 — Hybrid Fact Generation (fact_generator.py)                  │
-│  Generates ≤5 semantically rich rows per facility:                     │
-│    • 1 "summary" row (all scalar fields merged into a paragraph)       │
-│    • 1 "procedure" row (all procedures comma-joined)                   │
-│    • 1 "equipment" row (all equipment comma-joined)                    │
-│    • 1 "capability" row (all capabilities comma-joined)                │
-│    • 1 "specialty" row (all specialties comma-joined)                  │
-│  Missing data → row is silently skipped (never "Unknown"/"null").      │
-│  Output → facility_facts Delta table (for Vector Search / RAG)         │
+│  Stage 6 — Hybrid Fact Generation (fact_generator.py)                    │
+│  Generates ≤5 semantically rich rows per facility:                       │
+│    • 1 "summary" row (all scalar fields merged into a paragraph)         │
+│    • 1 "procedure" row (all procedures comma-joined)                     │
+│    • 1 "equipment" row (all equipment comma-joined)                      │
+│    • 1 "capability" row (all capabilities comma-joined)                  │
+│    • 1 "specialty" row (all specialties comma-joined)                    │
+│  Missing data → row is silently skipped (never "Unknown"/"null").        │
+│  Output → facility_facts Delta table (for Vector Search / RAG)           │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage 7 — Regional Insights Aggregation (main.py)                     │
-│  PySpark groupBy aggregations across 6 dimensions:                     │
-│    ① overview — total facilities, beds, doctors per region             │
-│    ② operator — public vs private breakdown with bed/doctor counts     │
-│    ③ specialty — facility count per specialty per region               │
-│    ④ procedure — facility count per procedure per region               │
-│    ⑤ equipment — facility count per equipment type per region          │
-│    ⑥ capability — facility count per capability per region             │
-│  Output → regional_insights Delta table (for Text-to-SQL / Genie)     │
+│  Stage 7 — Regional Insights Aggregation (main.py)                       │
+│  PySpark groupBy aggregations across 6 dimensions:                       │
+│    ① overview — total facilities, beds, doctors per region              │
+│    ② operator — public vs private breakdown with bed/doctor counts      │
+│    ③ specialty — facility count per specialty per region                │
+│    ④ procedure — facility count per procedure per region                │
+│    ⑤ equipment — facility count per equipment type per region           │
+│    ⑥ capability — facility count per capability per region              │
+│  Output → regional_insights Delta table (for Text-to-SQL / Genie)        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 

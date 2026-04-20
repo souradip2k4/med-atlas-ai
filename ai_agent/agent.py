@@ -93,6 +93,15 @@ GENIE_ID     = os.environ["GENIE_SPACE_ID"]
 CATALOG      = os.environ.get("CATALOG")
 SCHEMA       = os.environ.get("SCHEMA", "default")
 
+# Prefer resource-injected UC function names (Databricks Apps), with fallback for local/dev.
+ANALYZE_UC_FUNCTION_NAME = os.environ.get("ANALYZE_UC_FUNCTION_NAME")
+if not ANALYZE_UC_FUNCTION_NAME and CATALOG and SCHEMA:
+    ANALYZE_UC_FUNCTION_NAME = f"{CATALOG}.{SCHEMA}.analyze_medical_query"
+
+GEOSPATIAL_UC_FUNCTION_NAME = os.environ.get("GEOSPATIAL_UC_FUNCTION_NAME")
+if not GEOSPATIAL_UC_FUNCTION_NAME and CATALOG and SCHEMA:
+    GEOSPATIAL_UC_FUNCTION_NAME = f"{CATALOG}.{SCHEMA}.find_facilities_nearby"
+
 
 # ─── Tool 1 — Genie Chat ──────────────────────────────────────────────────────
 
@@ -314,8 +323,13 @@ def medical_agent_tool(
         args["affiliation_type"] = affiliation_type
 
     try:
+        if not ANALYZE_UC_FUNCTION_NAME:
+            return (
+                "[Medical Agent Error] Missing UC function name. Set ANALYZE_UC_FUNCTION_NAME "
+                "or set CATALOG/SCHEMA for fallback resolution."
+            )
         uc = UCFunctionToolkit(
-            function_names=[f"{CATALOG}.{SCHEMA}.analyze_medical_query"]
+            function_names=[ANALYZE_UC_FUNCTION_NAME]
         )
         uc_fn = uc.tools[0]
         raw_result = uc_fn.invoke({"query_json": json.dumps(args)})
@@ -561,8 +575,13 @@ def geospatial_query_tool(
         payload["urban_hubs"] = json.dumps(resolved_hubs)
 
     try:
+        if not GEOSPATIAL_UC_FUNCTION_NAME:
+            return (
+                "[Geospatial Query Error] Missing UC function name. Set GEOSPATIAL_UC_FUNCTION_NAME "
+                "or set CATALOG/SCHEMA for fallback resolution."
+            )
         uc = UCFunctionToolkit(
-            function_names=[f"{CATALOG}.{SCHEMA}.find_facilities_nearby"]
+            function_names=[GEOSPATIAL_UC_FUNCTION_NAME]
         )
         uc_fn = uc.tools[0]
         raw_result = uc_fn.invoke({"query_json": json.dumps(payload)})

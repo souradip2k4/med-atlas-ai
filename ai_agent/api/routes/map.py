@@ -8,17 +8,7 @@ SCHEMA = os.environ.get("SCHEMA")
 TABLE_PREFIX = f"{CATALOG}.{SCHEMA}"
 router = APIRouter(prefix="/map", tags=["Map"])
 
-# Static metadata per user requirements
-STATIC_AFFILIATIONS = [
-    "academic", 
-    "faith-tradition", 
-    "government", 
-    "community", 
-    "philanthropy-legacy"
-]
-STATIC_FACILITIES = ["dentist", "hospital", "farmacy", "clinic", "doctor"]
-STATIC_OPERATORS = ["private", "public"]
-STATIC_ORGS = ["facility", "ngo"]
+
 
 def _escape(val: str) -> str:
     """Safely escape single quotes for SQL."""
@@ -28,39 +18,17 @@ def _escape(val: str) -> str:
 
 @router.get("/metadata", response_model=FilterMetadata)
 def get_metadata():
-    """Fetch distinct regions, cities, and specialties, plus return static filter lists."""
-    query = f"SELECT DISTINCT state, city FROM {TABLE_PREFIX}.facility_records WHERE country = 'Ghana' AND state IS NOT NULL"
-    results = execute_sql(query)
+    """Fetch all metadata from the static location.json file."""
+    import json
+    import os
     
-    cities_by_region = {}
-    for row in results:
-        state = row.get("state")
-        city = row.get("city")
-        if not state:
-            continue
-        if state not in cities_by_region:
-            cities_by_region[state] = []
-        if city and city not in cities_by_region[state]:
-            cities_by_region[state].append(city)
-            
-    regions = list(cities_by_region.keys())
+    current_dir = os.path.dirname(__file__)
+    json_path = os.path.join(current_dir, "location.json")
     
-    # Fetch unique specialties
-    spec_query = f"SELECT DISTINCT explode(specialties) AS specialty FROM {TABLE_PREFIX}.facility_records WHERE country = 'Ghana' AND specialties IS NOT NULL"
-    spec_results = execute_sql(spec_query)
-    specialties = sorted(
-        [r.get("specialty") for r in spec_results if r.get("specialty")]
-    )
-    
-    return FilterMetadata(
-        regions=regions,
-        cities_by_region=cities_by_region,
-        specialties=specialties,
-        affiliation_types=STATIC_AFFILIATIONS,
-        facility_types=STATIC_FACILITIES,
-        operator_types=STATIC_OPERATORS,
-        organization_types=STATIC_ORGS
-    )
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        
+    return FilterMetadata(**data)
 
 @router.post("/search")
 def search_facilities(request: MapSearchRequest):
