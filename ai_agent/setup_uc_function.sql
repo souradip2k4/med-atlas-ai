@@ -14,7 +14,7 @@
 -- =========================================================================
 
 CREATE OR REPLACE FUNCTION med_atlas_ai_v2.default.analyze_medical_query(
-  query_json STRING
+  query_json STRING COMMENT 'JSON payload for medical analysis. Required key: query (string). Optional keys: region, city, facility_id, facility_name, facility_ids (JSON array string), operator_type, organization_type, facility_type, affiliation_type.'
 )
 RETURNS STRING
 LANGUAGE SQL
@@ -261,55 +261,9 @@ RETURN (
     )
     FROM (SELECT * FROM outliers ORDER BY ABS(reported_value - typical_value) DESC LIMIT 100)
   )
-
-  -- ══════════════════════════════════════════════════════════════════════════
-  -- Branch 3. NGO Overlap (scoped inline)
-  -- ══════════════════════════════════════════════════════════════════════════
-  WHEN (SELECT query_lower FROM query_params) RLIKE 'ngo overlap|overlapping ngo|same ngo|same region'
-  THEN (
-    WITH ngo_by_affiliation AS (
-      SELECT
-        fr.state AS region,
-        fr.city,
-        ARRAY_JOIN(COALESCE(fr.affiliation_types, ARRAY()), ',') AS affiliation_key,
-        COUNT(DISTINCT fr.facility_id) AS n_facilities,
-        COLLECT_LIST(fr.facility_name) AS facility_list
-      FROM med_atlas_ai.default.facility_records fr
-      WHERE fr.organization_type = 'ngo'
-        AND fr.state IS NOT NULL
-        AND fr.affiliation_types IS NOT NULL
-        AND ((SELECT region_filter FROM query_params) IS NULL
-             OR fr.state = (SELECT region_filter FROM query_params))
-        AND ((SELECT city_filter FROM query_params) IS NULL
-             OR fr.city = (SELECT city_filter FROM query_params))
-        AND ((SELECT affiliation_type_filter FROM query_params) IS NULL
-             OR ARRAY_CONTAINS(fr.affiliation_types, (SELECT affiliation_type_filter FROM query_params)))
-        AND ((SELECT facility_ids_filter FROM query_params) IS NULL
-             OR ARRAY_CONTAINS(from_json((SELECT facility_ids_filter FROM query_params), 'ARRAY<STRING>'), fr.facility_id))
-      GROUP BY fr.state, fr.city, ARRAY_JOIN(COALESCE(fr.affiliation_types, ARRAY()), ',')
-      HAVING COUNT(DISTINCT fr.facility_id) > 1
-    )
-    SELECT to_json(
-      map_from_arrays(
-        array('query', 'findings'),
-        array(
-          (SELECT parsed_input:query FROM query_params),
-          to_json(array_agg(named_struct(
-            'type',            'ngo_overlap_raw',
-            'region',          region,
-            'city',            city,
-            'affiliation_key', affiliation_key,
-            'n_facilities',    n_facilities,
-            'facilities',      facility_list,
-            'note',            'Determine if these represent duplicated efforts or complementary services'
-          )))
-        )
-      )
-    )
-    FROM (SELECT * FROM ngo_by_affiliation ORDER BY n_facilities DESC LIMIT 100)
   
   -- ══════════════════════════════════════════════════════════════════════════
-  -- Branch 4. Deep Validation (Specialty↔Procedure↔Equipment + Feature Mismatch)
+  -- Branch 3. Deep Validation (Specialty↔Procedure↔Equipment + Feature Mismatch)
   -- Region OR facility_id OR facility_name is required (guard rail).
   -- All other scope filters applied inline.
   -- ══════════════════════════════════════════════════════════════════════════

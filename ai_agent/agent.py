@@ -10,7 +10,7 @@ Tools:
   4. geospatial_query_tool   — Distance-based facility search via find_facilities_nearby UC function
 
 Architecture:
-  - Single LangGraph graph: [agent] → [tools] → [agent]
+  - Single LangGraph graph: [agent] → [tools] → [tool_postprocessor] → [agent]
   - LLM decides which tool(s) to call based on query type
   - ResponsesAgent pattern for MLflow deployment compatibility
 """
@@ -28,9 +28,9 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(_env_path)
 
-experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID")
-tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
-registry_uri = os.getenv("MLFLOW_REGISTRY_URI")
+# experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID")
+# tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+# registry_uri = os.getenv("MLFLOW_REGISTRY_URI")
 # Optional overrides:
 # - In Databricks Apps, experiment resource injection is enough for tracking.
 # - For local remote tracking, you can still set MLFLOW_TRACKING_URI / auth env vars.
@@ -56,6 +56,10 @@ registry_uri = os.getenv("MLFLOW_REGISTRY_URI")
 #     )
 
 mlflow.set_tracking_uri("sqlite:///mlflow.db")
+try:
+    mlflow.set_experiment("Default")
+except mlflow.exceptions.MlflowException as exc:
+    warnings.warn(f"Failed to set local MLflow experiment to Default: {exc}")
 # Enable LangChain tracing so tool calls and LLM responses are captured in MLflow.
 mlflow.langchain.autolog()
 
@@ -184,7 +188,9 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 
     kwargs = {
         "index_name": VS_INDEX,
-        "num_results": 45,
+        "num_results": 100,
+        # fact_id is the VS index primary key — MUST be included for retrieval to work.
+        # It is intentionally excluded from the JSON output returned to the LLM (see below).
         "columns": ["fact_id", "facility_id", "fact_text", "fact_type"],
     }
 
@@ -203,7 +209,18 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
                 doc for doc in results
                 if doc.metadata.get("fact_type") in post_filter_types
             ]
-        return results
+        # Convert Document list to structured JSON — drop fact_id (not needed by LLM)
+        if isinstance(results, list):
+            structured = [
+                {
+                    "facility_id": doc.metadata.get("facility_id", ""),
+                    "fact_type":   doc.metadata.get("fact_type", ""),
+                    "fact_text":   doc.page_content,
+                }
+                for doc in results
+            ]
+            return json.dumps({"results": structured, "total_results": len(structured)}, indent=2)
+        return json.dumps({"results": [], "total_results": 0})
     except Exception as exc:
         return f"[Vector Search Error] {exc}"
 
@@ -454,9 +471,6 @@ def geospatial_query_tool(
     ref_lon: float = 0.0,
     reference_location: str | None = None,
     radius_km: float = 50.0,
-    condition: str | None = None,
-    analysis_type: str = "nearby",
-    urban_hubs: list[str] | None = None,
     region: str | None = None,
     city: str | None = None,
     operator_type: str | None = None,
@@ -467,13 +481,7 @@ def geospatial_query_tool(
     """
     Geospatial facility search using ST_DistanceSpheroid on the WGS84 spheroid.
 
-    analysis_type options:
-      "nearby"      — Find all facilities within radius_km.
-                      Returns: list of facilities sorted by ascending distance.
-      "cold_spot"   — Find regions (states) that have zero facilities matching
-                      the given condition.
-      "urban_rural" — Returns distance from each facility to its nearest hub.
-                      If 'urban_hubs' is not provided, defaults to Ghana's 5 major.
+    Returns: A list of up to 100 facilities within radius_km, sorted by ascending distance.
 
     SCOPE FILTERS (all optional — apply ONLY what the user explicitly mentioned):
         region:            Restrict to a specific state/region (e.g., 'Greater Accra').
@@ -490,9 +498,6 @@ def geospatial_query_tool(
         reference_location: Name of the reference city/region (e.g., "Accra").
                             The tool will dynamically geocode this if provided!
         radius_km:          Search radius in kilometres (default 50).
-        condition:          Optional keyword to filter by medical condition/procedure.
-        analysis_type:      One of "nearby", "cold_spot", "urban_rural".
-        urban_hubs:         List of city names to act as centers for urban_rural.
 
     Trigger keywords: "within", "km", "distance", "near", "nearby", "closest",
     "cold spot", "geographic", "radius", "proximity", "urban", "rural".
@@ -524,10 +529,7 @@ def geospatial_query_tool(
         "ref_lat":       ref_lat,
         "ref_lon":       ref_lon,
         "radius_km":     radius_km,
-        "analysis_type": analysis_type,
     }
-    if condition:
-        payload["condition"] = condition
     # Scope filters — propagate only when user explicitly mentioned them
     if region:
         payload["region"] = region
@@ -541,38 +543,6 @@ def geospatial_query_tool(
         payload["facility_type"] = facility_type
     if affiliation_type:
         payload["affiliation_type"] = affiliation_type
-
-    # Dynamically geocode urban hubs if requested
-    if analysis_type == "urban_rural":
-        hubs_list = urban_hubs if urban_hubs else ["Accra", "Kumasi", "Tamale", "Cape Coast", "Takoradi"]
-        
-        api_key = os.getenv("LOCATION_IQ_ACCESS_TOKEN")
-        if not api_key:
-            return "[Geospatial Query Error] LOCATION_IQ_ACCESS_TOKEN not set in environment."
-            
-        resolved_hubs = []
-        for hub in hubs_list:
-            try:
-                resp = requests.get(
-                    "https://us1.locationiq.com/v1/search",
-                    params={"key": api_key, "q": f"{hub}, Ghana", "format": "json"},
-                    timeout=5
-                )
-                if resp.status_code == 200 and len(resp.json()) > 0:
-                    data = resp.json()[0]
-                    resolved_hubs.append({
-                        "name": hub,
-                        "lat": float(data["lat"]),
-                        "lon": float(data["lon"])
-                    })
-            except Exception:
-                pass  # Skip if unreachable
-                
-        if not resolved_hubs:
-            return "[Geospatial Query Error] Failed to geocode urban hubs dynamically."
-            
-        # JSON serialize the array so the SQL parser from_json works across nested structs
-        payload["urban_hubs"] = json.dumps(resolved_hubs)
 
     try:
         if not GEOSPATIAL_UC_FUNCTION_NAME:
@@ -596,7 +566,7 @@ def geospatial_query_tool(
         # The SQL map_from_arrays forces all values to STRING (all values must share one type).
         # Rehydrate numeric metadata fields back to proper Python numbers.
         _float_fields = ("reference_lat", "reference_lon", "radius_km")
-        _int_fields   = ("total_facilities_found",)
+        _int_fields   = ("total_facilities_returned",)
         for f in _float_fields:
             if f in outer and isinstance(outer[f], str):
                 try:
@@ -610,19 +580,15 @@ def geospatial_query_tool(
                 except (ValueError, TypeError):
                     pass
 
-        # The SQL function double-encodes the facilities/cold_spot arrays as a JSON string.
+        # The SQL function double-encodes the facilities array as a JSON string.
         # Parse it so the result is a proper nested object (not an escaped string).
-        for key in ("facilities", "cold_spot_regions"):
+        for key in ("facilities",):
             raw_val = outer.get(key)
             if isinstance(raw_val, str):
                 try:
                     outer[key] = json.loads(raw_val)
                 except (json.JSONDecodeError, TypeError):
                     pass  # leave as-is if not valid JSON
-
-        # Remove empty/null condition_filter to keep the payload lean.
-        if outer.get("condition_filter") in ("", "none", None):
-            outer.pop("condition_filter", None)
 
         return json.dumps(outer, indent=2)
     except Exception as exc:
@@ -641,56 +607,60 @@ SYSTEM_PROMPT = """You are Med-Atlas-AI, a healthcare infrastructure analyst for
 ## Tool Routing — Step-by-Step Decision
 
 Before answering, determine the query type by checking which keywords are present.
-A query can match ONE or MORE types simultaneously.
+Classify the query, then pick the SINGLE best tool using the priority table in Step 2.
+Only combine tools when the three explicitly approved multi-tool pipelines apply (GEO+SEMANTIC, GEO+ANALYTIC, or SEMANTIC+ANALYTIC).
 
 ### Step 1 — Classify the query (check all three):
 
 IS_GEOSPATIAL = True if ANY of these keywords appear:
-  "within", "km", "miles", "distance", "near", "nearby", "closest",
-  "cold spot", "geographic", "radius", "proximity", "urban", "rural",
-  "peri-urban", "how far", "geospatial", "location-based"
+  "within", "km", "distance", "near", "nearby", "closest",
+  "cold spot", "geographic", "radius", "proximity", "how far", "geospatial", "location-based"
 
 IS_QUANTITATIVE = True if ANY of these keywords appear:
   "how many", "count", "total", "average", "sum", "most", "least",
-  "top N", "region", "district", "ownership", "beds", "capacity", "staff",
+  "top N", "region", "district", "ownership", "beds", "capacity"
   "ratio", "percentage", "ranking", "compar", "distribution",
-  "how many hospitals in [region]", "number of", "how many facilities",
-  "oversupply", "scarcity", "specialist", "specialist distribution",
+  "number of", "how many facilities",
+  "specialist", "specialist distribution",
   "web presence", "website", "online presence",
   "doctors", "doctor count", "total doctors", "number of doctors",
-  "ngo", "classification", "classify", "categorize", "breakdown",
   "affiliation", "facility type", "operator type", "organization type"
+
+  NOTE — IS_QUANTITATIVE does NOT apply when the query is about equipment, procedures,
+  or capabilities. Those always route to IS_SEMANTIC or IS_ANALYTIC regardless of counting words.
 
 IS_SEMANTIC = True if ANY of these keywords appear:
   "similar", "like", "service", "equipment", "provides", "specialty",
   "has", "can provide", "offers", "what does", "which facilities provide",
-  "capability", "capabilities", "similar to", "what services", "procedures",
-  "over-claim", "implausib", "subspecialty", "equipment mismatch",
-  "corrobor", "camp", "outreach", "medical camp", "referral", "bundle",
-  "contradict", "inconsisten", "conflicting", "conflict"
+  "capability", "capabilities", "similar to", "what services", "procedures", "subspecialty", "camp", "medical camp"
 
 IS_ANALYTIC = True if ANY of these keywords appear:
-  "anomal", "gap", "unmet", "outlier", "flag",
+  "anomal", "gap", "unmet", "outlier", "flag", "oversupply", "scarcity",
   "abnormal", "red flag", "correlat", "overlapping", "mismatch",
   "feature mismatch", "procedure count", "equipment count", "signal",
   "validate", "consistency", "verify claim", "capable", "infrastructure",
+  "over-claim", "implausib", "corrobor", "contradict", "inconsisten", "conflicting", "conflict",
+  "classify", "categorize", "breakdown", "ngo", "classification",
   "procedure.*equipment", "equipment.*procedure"
 
-### Step 2 — Route accordingly:
+### Step 2 — Route by priority (pick the SINGLE highest-priority tool; only the three starred pipelines use multiple tools):
 
-| Classification                      | Tools to Call (in order)                                    |
-|-------------------------------------|-------------------------------------------------------------|
-| IS_GEOSPATIAL only                  | geospatial_query_tool                                       |
-| IS_GEOSPATIAL + IS_QUANTITATIVE     | geospatial_query_tool, then genie_chat_tool                 |
-| IS_GEOSPATIAL + IS_SEMANTIC         | geospatial_query_tool, then vector_search_tool              |
-| IS_GEOSPATIAL + IS_ANALYTIC         | geospatial_query_tool, then medical_agent_tool              |
-| IS_QUANTITATIVE only                | genie_chat_tool                                             |
-| IS_SEMANTIC only                    | vector_search_tool                                          |
-| IS_ANALYTIC only                    | medical_agent_tool                                          |
-| IS_QUANTITATIVE + IS_SEMANTIC       | genie_chat_tool, then vector_search_tool                    |
-| IS_QUANTITATIVE + IS_ANALYTIC       | genie_chat_tool, then medical_agent_tool                    |
-| IS_SEMANTIC + IS_ANALYTIC           | vector_search_tool, then medical_agent_tool                 |
-| ALL THREE (no geo)                  | genie_chat_tool → vector_search_tool → medical_agent_tool   |
+| Priority | Classification                  | Tool to Use                                                               |
+|----------|---------------------------------|---------------------------------------------------------------------------|
+| 1 ★      | IS_GEOSPATIAL + IS_SEMANTIC     | geospatial_query_tool → vector_search_tool (intersection pipeline below)  |
+| 2 ★      | IS_GEOSPATIAL + IS_ANALYTIC     | geospatial_query_tool → medical_agent_tool (facility_ids pipeline below)  |
+| 3 ★      | IS_SEMANTIC + IS_ANALYTIC       | vector_search_tool → medical_agent_tool (cohort pipeline below)          |
+| 4        | IS_GEOSPATIAL only              | geospatial_query_tool                                                     |
+| 5        | IS_ANALYTIC (any combo)         | medical_agent_tool                                                        |
+| 6        | IS_SEMANTIC only                | vector_search_tool                                                        |
+| 7        | IS_QUANTITATIVE only            | genie_chat_tool                                                           |
+
+**CRITICAL rules:**
+- IS_GEOSPATIAL always takes top priority when present.
+- IS_SEMANTIC + IS_ANALYTIC (no geo) → use the cohort pipeline (Priority 3★), NOT medical_agent alone.
+- Plain IS_ANALYTIC without semantic service terms → Priority 5 (medical_agent only).
+- `genie_chat_tool` is ONLY called when IS_QUANTITATIVE is True and IS_ANALYTIC and IS_SEMANTIC are both False.
+- Do NOT chain genie + vector_search, genie + medical_agent, or all three tools together — these combinations are never correct.
 
 ### Step 2.5 — Vector Search Fact-Type Guide (ALWAYS follow this when calling vector_search_tool):
 
@@ -718,12 +688,20 @@ explicitly asked for. Always pick the minimal relevant set.
 
 If the user asks for a physical distance search (e.g., "within 50 km of Accra"), you do NOT need to look up exact coordinates.
 Simply pass `reference_location="Accra"` to the `geospatial_query_tool`, and it will dynamically fetch the latitude/longitude for you!
+Always provide `reference_location` and `radius_km` when the user asks for facilities "near" a location or "within X km".
+The tool returns up to 100 facilities sorted by ascending distance.
 
-**Choosing `analysis_type`:**
-  • "nearby"      — user asks "within X km" or "near" a location. Provide `reference_location` and `radius_km`.
-  • "cold_spot"   — user asks about regions lacking a service, geographic gaps.
-  • "urban_rural" — user asks about urban vs rural service distribution. You may optionally pass a list of `urban_hubs`
-                    (e.g., `urban_hubs=["Accra", "Kumasi"]`) to dynamically define the urban centers for this search.
+**IS_GEOSPATIAL + IS_SEMANTIC Pipeline (CRITICAL — e.g., "hospitals within 200km providing X-ray"):**
+When the query is BOTH geospatial AND semantic:
+  1. Call `geospatial_query_tool` to get ALL facilities within the specified radius (no condition parameter needed).
+  2. Call `vector_search_tool` with the semantic query (e.g., "Provides X-ray imaging").
+  3. The Python postprocessor AUTOMATICALLY performs the facility_id set intersection between the two tool
+     results. You do NOT need to match, filter, or compare IDs manually.
+  4. You will receive the `geospatial_query_tool` result replaced with a JSON tagged
+     `"pipeline": "GEO_SEMANTIC_INTERSECTION"` — the facilities pre-matched from both tool outputs,
+     enriched with geo data (distance_km, city, state) and the matched semantic facts per facility.
+  5. Read `matched_facilities[]` directly and present those results. Do NOT re-intersect or filter manually.
+  6. The `vector_search_tool` result will contain only a short system note — ignore it entirely.
 
 **Scope Filters for Geospatial Tool:**
 If the user specifies any of the following in their query, extract and pass them to `geospatial_query_tool`:
@@ -741,6 +719,16 @@ When the query is BOTH geospatial AND analytic:
   3. Call `medical_agent_tool` with `facility_ids=["id1", "id2", ...]` passing the extracted list.
   This ensures the anomaly/validation analysis runs ONLY on the exact facilities found within the radius.
 
+**IS_SEMANTIC + IS_ANALYTIC Pipeline (CRITICAL — "hospitals offering neonatal care with anomalous capacity"):**
+When the query is BOTH semantic AND analytic (no geospatial component):
+  1. Call `vector_search_tool` with the semantic query to identify a relevant cohort of facilities.
+     Choose `fact_types` based on what the user is asking about (e.g., `["specialty"]` for neonatal care).
+  2. From its JSON output, extract ALL `facility_id` values from the `results[]` array (each entry has a `facility_id` field).
+  3. Call `medical_agent_tool` with `facility_ids=["id1", "id2", ...]` passing the extracted cohort.
+     This restricts the anomaly/validation analysis to only the semantically relevant facilities.
+  NOTE: Use this pipeline when the query asks to "find facilities with X service, then analyse/validate them".
+  Do NOT use it for general analytic queries (e.g., "oversupply in Ashanti") that have no semantic service filter.
+
 ### Step 2.5 — Medical Agent Tool Branch Selection Guide (CRITICAL):
 
 The `medical_agent_tool` is powered by a backend SQL function that uses EXACT keyword matching (`RLIKE`) on your `query` argument to decide which analysis branch to run. **If you do not include specific keywords, your query may fail or hit the wrong branch!**
@@ -751,8 +739,7 @@ When calling `medical_agent_tool`, you MUST include one of the Exact Match Keywo
 |---|---|---|
 | **Branch 1: Unmet Needs** | Missing specialties or absent procedures in a region | `unmet`, `gap`, `need`, `service gap` |
 | **Branch 2: Capacity Outliers** | Unusually high/low bed or doctor numbers | `outlier`, `anomal`, `flag`, `capacity outlier`, `doctor anomaly` |
-| **Branch 3: NGO Overlap** | Multiple NGOs operating similarly in the same city | `ngo overlap`, `overlapping ngo`, `same ngo`, `same region` |
-| **Branch 4: Deep Validation** | Verifying claims/mismatches, classifying facility gaps (equipment vs staff vs service), or root-cause analysis. *(Requires passing a `region` or `facility_name`!)* | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `infrastr`, `equipment gap`, `staffing gap`, `classify gap`, `root cause` |
+| **Branch 3: Deep Validation** | Verifying claims/mismatches, classifying facility gaps (equipment vs staff vs service), or root-cause analysis. *(Requires passing a `region` or `facility_name`!)* | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `infrastr`, `equipment gap`, `staffing gap`, `classify gap`, `root cause` |
 
 *Example:* If the user asks "Find hospitals making suspicious surgical claims", DO NOT just use `"suspicious surgical claims"`. You must inject a Branch 4 keyword: `"verify claim for suspicious surgical claims"`.
 
@@ -767,7 +754,6 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
   • For `regional_coverage` (Unmet Needs):
       - `specialties_missing` is a **pre-computed, definitive SQL list** — report every specialty in it as a **confirmed gap** for that region (these exist elsewhere in the dataset but not here).
       - For `procedures_present` and `equipment_present` (free-text): apply your medical domain knowledge to identify what services or equipment a region of that size and facility count would typically need but appears to lack. These are NOT pre-computed gaps — they require your reasoning.
-  • For `ngo_overlap_raw`: Evaluate if multiple facilities with the exact same NGO affiliation in the same city represent a duplication of services or complementary care.
   • For `deep_validation` (Verifying claims and capabilities):
       The tool has already analyzed all matching facilities in sequential batches of 20.
       It returns a `validation_summary` — a plain-text block where each anomalous facility
@@ -781,11 +767,11 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
 
 ### Step 3 — Multi-tool orchestration:
 
-After receiving each tool result, decide:
-  • If more data is needed from another tool → call the next tool in sequence
-  • If all necessary data is collected → synthesize a comprehensive markdown answer
-  • If a tool returns an error or empty results → try the next appropriate tool as fallback
-  • Never repeat the same tool twice for the same purpose. DO NOT repeatedly call a tool with slight variations of your search term (e.g. 'procedure count' then 'procedure count anomaly' then 'procedure count outlier'). If the first call returns valid JSON data (even if no anomalies are found), accept it and synthesize the final answer.
+Only three approved multi-tool pipelines exist (GEO+SEMANTIC, GEO+ANALYTIC, and SEMANTIC+ANALYTIC — see Step 2.5).
+For all other query types, a single tool is sufficient. Rules:
+  • Call the single highest-priority tool for the query. Once it returns valid data (even empty results), synthesize the final answer — do NOT call additional tools.
+  • If a tool returns an error → try the next most appropriate tool as a one-time fallback only.
+  • Never repeat the same tool twice for the same purpose. DO NOT call a tool with slight variations of the same search term.
 
 ### Step 4 — Response format:
 
@@ -796,33 +782,31 @@ After receiving each tool result, decide:
 • If you called multiple tools, synthesize their results together into a single cohesive summary.
 
 ### Handling Large Results:
-If a tool (like geospatial search, medical anomaly flagging, or deep validation) returns a large list of facilities, STRICTLY follow these rules based on the number of **relevant/anomalous** facilities you find after your analysis:
 
-1. **If there are ≤ 25 relevant/anomalous facilities**:
-   Display ALL of them in a comprehensive markdown table.
+**Tool-specific rules — read carefully:**
 
-2. **If there are between 26 and 60 relevant/anomalous facilities**:
-   List the **top 60 most important/anomalous** facilities in a markdown table (prioritize by severity: high → medium → low, or by distance if geospatial). Then append the high-level summary below the table.
+- **`genie_chat_tool`**: Present Genie's answer directly as-is. Do NOT apply table filtering or row limits — Genie already produces a formatted, aggregated response. Just relay it naturally.
+  **`genie_chat_tool` is only accurate for structured facility metadata** — counts by region, ownership type, affiliation, doctor counts, bed counts, and web presence. It CANNOT accurately answer questions about equipment, procedures, or clinical capabilities. If the query involves those, route to `vector_search_tool` or `medical_agent_tool` instead.
+- **`vector_search_tool`**: The tool returns a JSON with a `results[]` array of semantic matches (each entry has `facility_id`, `fact_type`, `fact_text`). Evaluate ALL entries for relevance. Only include facilities whose `fact_text` genuinely answers the user's query — discard low-relevance entries silently. Apply the table rules below to the filtered relevant set.
+  When used in a GEO+SEMANTIC pipeline, you will only receive a short system note from this tool — ignore it and read the `GEO_SEMANTIC_INTERSECTION` JSON in the `geospatial_query_tool` result instead.
+- **`geospatial_query_tool`**: When used alone or in GEO+ANALYTIC pipeline, read and evaluate ALL facilities in `facilities[]`. When used in a GEO+SEMANTIC pipeline, the result is a `GEO_SEMANTIC_INTERSECTION` JSON — read `matched_facilities[]` directly (already Python-intersected, sorted by distance). Apply table rules to the matched set.
+- **`medical_agent_tool`**: Read and evaluate ALL returned facilities. Apply the table rules below to the genuinely relevant/anomalous subset only — do NOT count raw rows returned by the tool.
 
-3. **If there are > 60 relevant/anomalous facilities**:
-   List the **top 60 most important/anomalous** facilities in a markdown table (same priority rule). Then append the high-level summary below the table. 
-   NEVER list all facilities. NEVER omit the table entirely.
+**Table display rules (applies to `vector_search_tool`, `geospatial_query_tool`, `medical_agent_tool`):**
+- If there are ≤ 25 relevant facilities: show ALL of them in the table.
+- If there are > 25 relevant facilities: table the **top 60** sorted by severity (high → medium → low) or distance (nearest first). Append the high-level summary below the table. Never omit the table. Never pad it with irrelevant rows.
 
-**CRITICAL: You MUST include a markdown table with AT LEAST 20 facilities ONLY IF there are actually ≥ 20 truly relevant/anomalous facilities. If the tool returns 70 rows but only 12 have genuine anomalies/relevance, just list those 12 in the table. DO NOT pad the table with normal/consistent facilities just to hit 20. But if there ARE ≥ 20 valid hits, you MUST table them.**
+### High-Level Summary (append below table whenever > 25 relevant facilities):
+(Use paragraphs and bullet points — NEVER inside a markdown table):
 
-### High-Level Summary Template (always append after the table when > 25 rows):
-(Use paragraphs and bullet points. NEVER put this summary inside a markdown table):
-  
-  Answer: There are [Total Number] [Facility Type/Hospitals] [condition/radius/finding].
-  
   Key findings:
-  - **Most Extreme / Highest Severity**: [Name] – [finding].
-  - **Other notable facilities**: [Name 1], [Name 2], [Name 3] and [Name 4] ([brief note on why]).
-  
-  Medical context: [1-2 sentences on the medical implications of this density/anomaly]
+  - **Most significant**: [Name] – [core finding].
+  - **Other notable**: [Name 1], [Name 2], [Name 3] ([brief note on why]).
+
+  Medical context: [1-2 sentences on the clinical or operational implication of this finding]
 
 
-• Cite specific facility names and regions.
+• Cite specific facility names and regions in your response.
 • If no results are found, say so clearly and suggest trying a different approach.
 
 
@@ -837,7 +821,7 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence, add_messages]
 
 
-llm = ChatDatabricks(endpoint=LLM_ENDPOINT, temperature=0.1, max_tokens=16384)
+llm = ChatDatabricks(endpoint=LLM_ENDPOINT, temperature=0.2, max_tokens=16384)
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
 
@@ -854,12 +838,167 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
+def tool_postprocessor(state: AgentState) -> dict:
+    """
+    Runs after every ToolNode execution. Scans the full message history to detect
+    when both geospatial_query_tool and vector_search_tool results are present.
+
+    Triggers on: GEO+SEMANTIC pipeline (Priority 1★) only.
+      - Performs a Python set intersection on facility_id between the two result sets.
+      - Replaces both ToolMessage contents via LangGraph's id-based in-place replacement
+        (no custom reducer needed — same id = replaces existing message).
+      - Both ToolMessages are kept (content replaced) to preserve the tool_call_id
+        chain required by the preceding AIMessage.
+
+    No-op for: single-tool calls, genie_chat_tool, GEO+ANALYTIC, and SEMANTIC+ANALYTIC
+    (those are cascading pipelines — the LLM passes facility_ids as input to Tool B).
+    """
+    messages = list(state["messages"])
+
+    # Extract only the messages from the current turn (back to the last HumanMessage)
+    current_turn_msgs = []
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            break
+        current_turn_msgs.append(msg)
+    current_turn_msgs.reverse()
+
+    # Find the MOST RECENT tool messages in the current turn
+    geo_msg: ToolMessage | None = None
+    vs_msg:  ToolMessage | None = None
+    
+    for m in reversed(current_turn_msgs):
+        if isinstance(m, ToolMessage):
+            # Only pick the first one we find going backwards (the most recent one)
+            if m.name == "geospatial_query_tool" and geo_msg is None:
+                geo_msg = m
+            elif m.name == "vector_search_tool" and vs_msg is None:
+                vs_msg = m
+
+    # Only proceed when BOTH are present in the current turn
+    if geo_msg is None or vs_msg is None:
+        return {"messages": []}
+
+    # Guard: skip if these specific messages were already intersected
+    if ("GEO_SEMANTIC_INTERSECTION" in (geo_msg.content or "") or 
+        "[Intersection performed" in (vs_msg.content or "")):
+        return {"messages": []}
+
+    # Parse both JSON tool outputs
+    try:
+        geo_data = json.loads(geo_msg.content)
+        vs_data  = json.loads(vs_msg.content)
+    except (json.JSONDecodeError, TypeError):
+        # Unparseable — pass through unchanged, let LLM handle it as-is
+        return {"messages": []}
+
+    geo_facilities = geo_data.get("facilities", [])
+    vs_results     = vs_data.get("results", [])
+
+    # Build lookup: facility_id → geo facility record
+    geo_by_id: dict[str, dict] = {
+        f["facility_id"]: f
+        for f in geo_facilities
+        if "facility_id" in f
+    }
+
+    # Build lookup: facility_id → list of matched semantic facts
+    vs_by_id: dict[str, list[dict]] = {}
+    for r in vs_results:
+        fid = r.get("facility_id", "")
+        if fid:
+            vs_by_id.setdefault(fid, []).append({
+                "fact_type": r.get("fact_type", ""),
+                "fact_text": r.get("fact_text", ""),
+            })
+
+    # Python set intersection on facility_id
+    common_ids = set(geo_by_id.keys()) & set(vs_by_id.keys())
+
+    matched: list[dict] = []
+    for fid in common_ids:
+        geo_f = geo_by_id[fid]
+        matched.append({
+            "facility_id":   fid,
+            "facility_name": geo_f.get("facility_name", ""),
+            "facility_type": geo_f.get("facility_type", ""),
+            "city":          geo_f.get("city", ""),
+            "state":         geo_f.get("state", ""),
+            "country":       geo_f.get("country", ""),
+            "distance_km":   geo_f.get("distance_km"),
+            "specialties":   geo_f.get("specialties", ""),
+            "procedures":    geo_f.get("procedures", ""),
+            "equipment":     geo_f.get("equipment", ""),
+            "matched_facts": vs_by_id[fid],
+        })
+
+    # Sort by ascending distance (nearest first)
+    matched.sort(key=lambda x: x.get("distance_km") or 9999)
+
+    merged: dict = {
+        "pipeline":           "GEO_SEMANTIC_INTERSECTION",
+        "geo_total":          len(geo_facilities),
+        "semantic_total":     len(vs_results),
+        "matched_count":      len(matched),
+        "reference_lat":      geo_data.get("reference_lat"),
+        "reference_lon":      geo_data.get("reference_lon"),
+        "radius_km":          geo_data.get("radius_km"),
+        "matched_facilities": matched,
+    }
+
+    # Log a dedicated MLflow span for the intersection so the pre-replacement stats
+    # (raw geo_total / semantic_total) remain traceable even after the ToolMessage
+    # content is replaced by add_messages. mlflow.langchain.autolog() only records the
+    # FINAL state of each message, so without this span the original 100-facility payload
+    # from geospatial_query_tool would be invisible in the MLflow trace.
+    try:
+        with mlflow.start_span(
+            name="geo_semantic_intersection",
+            span_type="CHAIN",
+        ) as span:
+            span.set_inputs({
+                "geo_total":     len(geo_facilities),
+                "semantic_total": len(vs_results),
+                "radius_km":     geo_data.get("radius_km"),
+                "reference_lat": geo_data.get("reference_lat"),
+                "reference_lon": geo_data.get("reference_lon"),
+            })
+            span.set_outputs({
+                "matched_count": len(matched),
+                "matched_facility_ids": [m["facility_id"] for m in matched],
+            })
+    except Exception:
+        pass  # never block postprocessor execution due to tracing errors
+
+    # Replace geo ToolMessage content with merged intersection result.
+    # Using the SAME id triggers LangGraph's add_messages in-place replacement.
+    geo_replacement = ToolMessage(
+        id=geo_msg.id,
+        tool_call_id=geo_msg.tool_call_id,
+        name="geospatial_query_tool",
+        content=json.dumps(merged, indent=2),
+    )
+
+    # Replace vector_search ToolMessage with a short placeholder.
+    # Must be kept to satisfy the tool_call_id chain in the preceding AIMessage.
+    vs_replacement = ToolMessage(
+        id=vs_msg.id,
+        tool_call_id=vs_msg.tool_call_id,
+        name="vector_search_tool",
+        content="[Intersection performed by Python postprocessor — see geospatial_query_tool result above]",
+    )
+
+    return {"messages": [geo_replacement, vs_replacement]}
+
+
 def build_graph():
     graph = StateGraph(AgentState)
     graph.add_node("agent", RunnableLambda(call_model))
     graph.add_node("tools", ToolNode(ALL_TOOLS))
+    graph.add_node("tool_postprocessor", RunnableLambda(tool_postprocessor))
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", "end": END})
-    graph.add_edge("tools", "agent")
+    graph.add_edge("tools", "tool_postprocessor")
+    graph.add_edge("tool_postprocessor", "agent")
     graph.set_entry_point("agent")
     return graph.compile()
 
@@ -897,6 +1036,11 @@ class _ToolCallTracker:
         self._citations: list[dict[str, Any]] = []
         # step index counter (increments per tool call)
         self._step_index = 0
+        # call_id → index in self._citations for deduplication.
+        # The tool_postprocessor emits replacement ToolMessages with the same call_id
+        # as the originals. Without this map, each replacement creates a duplicate
+        # citation step. With it, we UPDATE the existing citation in-place.
+        self._citation_index_by_call_id: dict[str, int] = {}
 
     # ── Citation parsers ──────────────────────────────────────────────────────
 
@@ -912,21 +1056,63 @@ class _ToolCallTracker:
         sources: list[dict[str, Any]] = []
         try:
             import re
-            # Primary: try JSON parse if output was serialised
+
+            # ── Handle postprocessor placeholder ──────────────────────────────
+            # When GEO+SEMANTIC intersection ran, the postprocessor replaced this
+            # ToolMessage with a short string. Extract sources from the intersection
+            # JSON stored in the geo ToolMessage (passed via call_args context).
+            if raw_output.startswith("[Intersection performed"):
+                # Hydrate sources from call_args intersection_sources if available,
+                # otherwise return an empty but valid citation (sources are in geo step).
+                inter_sources = call_args.get("_intersection_sources", [])
+                return {
+                    "step_index": None,
+                    "tool_name": call_name,
+                    "call_id": call_id,
+                    "query_used": call_args.get("query", ""),
+                    "tables_accessed": ["facility_facts"],
+                    "note": "Intersection performed by postprocessor — sources listed under geospatial_query_tool step",
+                    "sources": inter_sources,
+                }
+
+            # ── New structured JSON format: {results: [], total_results: N} ──
             try:
-                docs = json.loads(raw_output)
-                if isinstance(docs, list):
-                    for doc in docs:
+                parsed = json.loads(raw_output)
+                if isinstance(parsed, dict) and "results" in parsed:
+                    for doc in parsed["results"]:
+                        if not isinstance(doc, dict):
+                            continue
+                        fact_text = doc.get("fact_text", "")
+                        snippet = fact_text[:200] + "..." if len(fact_text) > 200 else fact_text
+                        facility_name_extracted = None
+                        if " in " in snippet:
+                            facility_name_extracted = snippet.split(" in ")[0].strip()
+                        sources.append({
+                            "source_type": "facility_facts",
+                            "facility_id": doc.get("facility_id"),
+                            "facility_name": facility_name_extracted,
+                            "fact_type": doc.get("fact_type"),
+                            "excerpt": snippet,
+                        })
+                    return {
+                        "step_index": None,
+                        "tool_name": call_name,
+                        "call_id": call_id,
+                        "query_used": call_args.get("query", ""),
+                        "tables_accessed": ["facility_facts"],
+                        "sources": sources,
+                    }
+                # Legacy: list of Document dicts [{metadata:{}, page_content:''}]
+                if isinstance(parsed, list):
+                    for doc in parsed:
                         meta = doc.get("metadata", {}) if isinstance(doc, dict) else {}
                         page_content = doc.get("page_content", "") if isinstance(doc, dict) else ""
                         snippet = page_content[:200] + "..." if len(page_content) > 200 else page_content
                         sources.append({
                             "source_type": "facility_facts",
-                            "fact_id": meta.get("fact_id"),
                             "facility_id": meta.get("facility_id"),
                             "fact_type": meta.get("fact_type"),
                             "excerpt": snippet,
-                            # No lat/lon — facility_facts table has none
                         })
                     return {
                         "step_index": None,
@@ -1119,35 +1305,19 @@ class _ToolCallTracker:
                                     call_args: dict, raw_output: str) -> dict[str, Any]:
         """
         Parse geospatial_query_tool output.
-        The SQL function wraps results in a top-level JSON object:
-          { 'analysis_type': '...', 'facilities': '[{...}, ...]'  }  (nearby / urban_rural)
-          { 'analysis_type': 'cold_spot', 'cold_spot_regions': '[{...}]' }  (cold_spot)
-        The inner 'facilities' value is itself a JSON-encoded string in some SDK versions.
+        Handles two formats:
+          1. Raw SQL output: { 'analysis_type': 'nearby', 'facilities': [...] }
+          2. Post-intersection: { 'pipeline': 'GEO_SEMANTIC_INTERSECTION', 'matched_facilities': [...] }
         """
         sources: list[dict[str, Any]] = []
         analysis_type = "nearby"
         try:
             outer = json.loads(raw_output)
-            analysis_type = outer.get("analysis_type", "nearby")
 
-            if analysis_type == "cold_spot":
-                regions_raw = outer.get("cold_spot_regions", "[]")
-                regions = json.loads(regions_raw) if isinstance(regions_raw, str) else regions_raw
-                for r in (regions or []):
-                    if not isinstance(r, dict):
-                        continue
-                    source_dict = {
-                        "source_type": "facility_records",
-                        "region": r.get("state"),
-                        "total_facilities": r.get("total_facilities"),
-                        "matching_facilities": r.get("matching_facilities"),
-                    }
-                    sources.append({k: v for k, v in source_dict.items() if v is not None})
-            else:
-                # nearby or urban_rural
-                facilities_raw = outer.get("facilities", "[]")
-                facilities = json.loads(facilities_raw) if isinstance(facilities_raw, str) else facilities_raw
-                for r in (facilities or []):
+            # ── GEO_SEMANTIC_INTERSECTION (postprocessor replaced the message) ──
+            if outer.get("pipeline") == "GEO_SEMANTIC_INTERSECTION":
+                analysis_type = "GEO_SEMANTIC_INTERSECTION"
+                for r in outer.get("matched_facilities", []):
                     if not isinstance(r, dict):
                         continue
                     source_dict = {
@@ -1156,9 +1326,43 @@ class _ToolCallTracker:
                         "facility_name": r.get("facility_name"),
                         "city": r.get("city"),
                         "state": r.get("state"),
-                        "distance_km": r.get("distance_km")
+                        "distance_km": r.get("distance_km"),
                     }
                     sources.append({k: v for k, v in source_dict.items() if v is not None})
+
+            else:
+                # ── Raw SQL output ──
+                analysis_type = outer.get("analysis_type", "nearby")
+
+                if analysis_type == "cold_spot":
+                    regions_raw = outer.get("cold_spot_regions", "[]")
+                    regions = json.loads(regions_raw) if isinstance(regions_raw, str) else regions_raw
+                    for r in (regions or []):
+                        if not isinstance(r, dict):
+                            continue
+                        source_dict = {
+                            "source_type": "facility_records",
+                            "region": r.get("state"),
+                            "total_facilities": r.get("total_facilities"),
+                            "matching_facilities": r.get("matching_facilities"),
+                        }
+                        sources.append({k: v for k, v in source_dict.items() if v is not None})
+                else:
+                    # nearby or urban_rural
+                    facilities_raw = outer.get("facilities", "[]")
+                    facilities = json.loads(facilities_raw) if isinstance(facilities_raw, str) else facilities_raw
+                    for r in (facilities or []):
+                        if not isinstance(r, dict):
+                            continue
+                        source_dict = {
+                            "source_type": "facility_records",
+                            "facility_id": r.get("facility_id"),
+                            "facility_name": r.get("facility_name"),
+                            "city": r.get("city"),
+                            "state": r.get("state"),
+                            "distance_km": r.get("distance_km")
+                        }
+                        sources.append({k: v for k, v in source_dict.items() if v is not None})
         except Exception:
             pass
         return {
@@ -1172,8 +1376,12 @@ class _ToolCallTracker:
         }
 
     def _extract_citations(self, call_id: str, tool_content: str) -> None:
-        """Look up the matching tool call and dispatch to the right parser."""
-        # Find the tool call details from pending_calls
+        """Look up the matching tool call and dispatch to the right parser.
+
+        If this call_id already has a citation (because the tool_postprocessor emitted
+        a replacement ToolMessage for the same call_id), UPDATE the existing entry
+        in-place with the richer postprocessor data instead of appending a new step.
+        """
         call_info = next(
             (c for c in self.pending_calls if c["call_id"] == call_id),
             None,
@@ -1201,9 +1409,18 @@ class _ToolCallTracker:
                 "sources": [],
             }
 
-        citation["step_index"] = self._step_index
-        self._step_index += 1
-        self._citations.append(citation)
+        existing_idx = self._citation_index_by_call_id.get(call_id)
+        if existing_idx is not None:
+            # Postprocessor replacement: UPDATE the existing citation in-place.
+            # Preserve the original step_index; merge richer data from replacement.
+            citation["step_index"] = self._citations[existing_idx]["step_index"]
+            self._citations[existing_idx] = citation
+        else:
+            # First time seeing this call_id: create a new citation step.
+            citation["step_index"] = self._step_index
+            self._step_index += 1
+            self._citation_index_by_call_id[call_id] = len(self._citations)
+            self._citations.append(citation)
 
     def get_citations(self) -> dict[str, Any]:
         """Return the full citation object for inclusion in the API response."""
@@ -1301,21 +1518,47 @@ class _ToolCallTracker:
                 ))
 
         elif msg_type == "tool":
-            # Tool result — store it and emit function_call_output immediately after
-            # the corresponding function_call. We emit it in the order it arrives.
+            # Tool result — store it and build/update citations.
+            # The tool_postprocessor emits replacement ToolMessages with the SAME call_id
+            # as the originals (LangGraph add_messages in-place replacement). We must:
+            #   1. Always update call_results so process_message has the latest content.
+            #   2. Always call _extract_citations — it will UPDATE existing entries.
+            #   3. Only emit a function_call_output event the FIRST time (no duplicates
+            #      in the output sequence — postprocessor replacements are transparent).
             call_id = getattr(msg, "tool_call_id", None) or "unknown"
             tool_content = getattr(msg, "content", None) or ""
+            is_replacement = call_id in self.call_results  # already emitted once
+
             self.call_results[call_id] = tool_content
 
-            # Extract citations from this tool result
-            self._extract_citations(call_id, tool_content if isinstance(tool_content, str) else str(tool_content))
+            # Extract/update citations with the latest (possibly richer) content
+            self._extract_citations(
+                call_id,
+                tool_content if isinstance(tool_content, str) else str(tool_content),
+            )
 
-            # Emit the function_call_output event
-            self._emit(OutputItem(
-                type="function_call_output",
-                call_id=call_id,
-                output=tool_content,
-            ))
+            if not is_replacement:
+                # First time: emit the function_call_output event normally
+                self._emit(OutputItem(
+                    type="function_call_output",
+                    call_id=call_id,
+                    output=tool_content,
+                ))
+            else:
+                # Postprocessor replacement: update the already-emitted OutputItem's
+                # output in-place so the API response reflects the final content.
+                for event in self.events:
+                    item = getattr(event, "item", None)
+                    if (
+                        item is not None
+                        and getattr(item, "type", None) == "function_call_output"
+                        and getattr(item, "call_id", None) == call_id
+                    ):
+                        # OutputItem is a dataclass/NamedTuple — rebuild with updated output
+                        try:
+                            object.__setattr__(item, "output", tool_content)
+                        except (AttributeError, TypeError):
+                            pass  # immutable; leave the original — citation is still updated
 
         elif msg_type in ("user", "human"):
             # Skip user messages in output
