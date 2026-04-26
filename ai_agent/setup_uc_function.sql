@@ -18,7 +18,7 @@ CREATE OR REPLACE FUNCTION med_atlas_ai_v2.default.analyze_medical_query(
 )
 RETURNS STRING
 LANGUAGE SQL
-COMMENT 'Medical anomaly detection and analytics with scope filtering'
+COMMENT 'Routes to one of 3 SQL analysis branches based on keywords in the query field: (1) regional_coverage — unmet specialty gaps per region/city (trigger: unmet|gap|need); (2) anomaly_flagging — outlier bed/doctor counts vs global baseline (trigger: outlier|anomal|flag); (3) deep_validation — specialty-procedure-equipment consistency per facility (trigger: mismatch|validate|consistency). Returns JSON with query + findings array.'
 RETURN (
 
   WITH query_params AS (
@@ -43,16 +43,32 @@ RETURN (
   -- Scope: region, city, operator_type, organization_type, facility_type,
   --        affiliation_type, facility_ids are ALL applied inline.
   -- global_specialties always scans ALL facilities (reference universe).
+  -- all_regions ensures regions with 0 coverage are still returned.
   -- ══════════════════════════════════════════════════════════════════════════
   WHEN (SELECT query_lower FROM query_params) RLIKE 'unmet|gap|need|service gap'
   THEN (
     WITH
+    all_regions AS (
+      -- Enumerate every distinct region (scoped by region/city if provided).
+      -- No org_type filter: we want ALL regions to appear so zero-coverage gaps show up.
+      SELECT DISTINCT state AS region
+      FROM med_atlas_ai.default.facility_records
+      WHERE state IS NOT NULL
+        AND ((SELECT region_filter FROM query_params) IS NULL
+             OR state = (SELECT region_filter FROM query_params))
+        AND ((SELECT city_filter FROM query_params) IS NULL
+             OR city = (SELECT city_filter FROM query_params))
+    ),
     global_specialties AS (
+      -- Reference universe: all specialties across all matching org types.
+      -- If organization_type is explicitly provided (e.g. 'ngo'), only that type's
+      -- specialties form the universe. Otherwise scan ALL org types.
       SELECT COLLECT_SET(specialty) AS all_known_specialties
       FROM (
         SELECT EXPLODE(COALESCE(specialties, ARRAY())) AS specialty
         FROM med_atlas_ai.default.facility_records
-        WHERE organization_type = 'facility'
+        WHERE ((SELECT organization_type_filter FROM query_params) IS NULL
+               OR LOWER(organization_type) = LOWER((SELECT organization_type_filter FROM query_params)))
       )
       WHERE specialty IS NOT NULL AND TRIM(specialty) != ''
     ),
@@ -66,15 +82,14 @@ RETURN (
       FROM med_atlas_ai.default.facility_records fr
       LATERAL VIEW OUTER EXPLODE(COALESCE(fr.specialties, ARRAY())) AS specialty_val
       WHERE fr.state IS NOT NULL
-        AND fr.organization_type = 'facility'
+        AND ((SELECT organization_type_filter FROM query_params) IS NULL
+             OR LOWER(fr.organization_type) = LOWER((SELECT organization_type_filter FROM query_params)))
         AND ((SELECT region_filter FROM query_params) IS NULL
              OR fr.state = (SELECT region_filter FROM query_params))
         AND ((SELECT city_filter FROM query_params) IS NULL
              OR fr.city = (SELECT city_filter FROM query_params))
         AND ((SELECT operator_type_filter FROM query_params) IS NULL
              OR LOWER(fr.operator_type) = LOWER((SELECT operator_type_filter FROM query_params)))
-        AND ((SELECT organization_type_filter FROM query_params) IS NULL
-             OR LOWER(fr.organization_type) = LOWER((SELECT organization_type_filter FROM query_params)))
         AND ((SELECT facility_type_filter FROM query_params) IS NULL
              OR LOWER(fr.facility_type) = LOWER((SELECT facility_type_filter FROM query_params)))
         AND ((SELECT affiliation_type_filter FROM query_params) IS NULL
@@ -90,18 +105,19 @@ RETURN (
           (SELECT parsed_input:query FROM query_params),
           to_json(array_agg(named_struct(
             'type',                'regional_coverage',
-            'region',              rc.region,
-            'total_facilities',    rc.total_facilities,
-            'specialties_present', rc.region_specialties,
-            'specialties_missing', ARRAY_EXCEPT(gs.all_known_specialties, rc.region_specialties),
-            'procedures_present',  rc.all_procedures,
-            'equipment_present',   rc.all_equipment,
-            'note', 'specialties_missing is a definitive SQL-computed list of specialties absent from this scope — report these as confirmed gaps. For procedures and equipment (free-text), apply medical domain knowledge to identify what is typically needed.'
+            'region',              ar.region,
+            'total_facilities',    COALESCE(rc.total_facilities, 0),
+            'specialties_present', COALESCE(rc.region_specialties, ARRAY()),
+            'specialties_missing', CASE WHEN rc.total_facilities IS NULL THEN gs.all_known_specialties ELSE ARRAY_EXCEPT(gs.all_known_specialties, COALESCE(rc.region_specialties, ARRAY())) END,
+            'procedures_present',  COALESCE(rc.all_procedures, ARRAY()),
+            'equipment_present',   COALESCE(rc.all_equipment, ARRAY()),
+            'note', 'specialties_missing is a definitive SQL-computed list of specialties absent from this scope. If total_facilities is 0, this region has a complete absence of the queried organization type.'
           )))
         )
       )
     )
-    FROM region_coverage rc
+    FROM all_regions ar
+    LEFT JOIN region_coverage rc ON ar.region = rc.region
     CROSS JOIN global_specialties gs
   )
 

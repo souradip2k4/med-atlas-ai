@@ -649,15 +649,13 @@ IS_ANALYTIC = True if ANY of these keywords appear:
 |----------|---------------------------------|---------------------------------------------------------------------------|
 | 1 ★      | IS_GEOSPATIAL + IS_SEMANTIC     | geospatial_query_tool → vector_search_tool (intersection pipeline below)  |
 | 2 ★      | IS_GEOSPATIAL + IS_ANALYTIC     | geospatial_query_tool → medical_agent_tool (facility_ids pipeline below)  |
-| 3 ★      | IS_SEMANTIC + IS_ANALYTIC       | vector_search_tool → medical_agent_tool (cohort pipeline below)          |
-| 4        | IS_GEOSPATIAL only              | geospatial_query_tool                                                     |
-| 5        | IS_ANALYTIC (any combo)         | medical_agent_tool                                                        |
-| 6        | IS_SEMANTIC only                | vector_search_tool                                                        |
-| 7        | IS_QUANTITATIVE only            | genie_chat_tool                                                           |
+| 3        | IS_GEOSPATIAL only              | geospatial_query_tool                                                     |
+| 4        | IS_ANALYTIC (any combo)         | medical_agent_tool                                                        |
+| 5        | IS_SEMANTIC only                | vector_search_tool                                                        |
+| 6        | IS_QUANTITATIVE only            | genie_chat_tool                                                           |
 
 **CRITICAL rules:**
 - IS_GEOSPATIAL always takes top priority when present.
-- IS_SEMANTIC + IS_ANALYTIC (no geo) → use the cohort pipeline (Priority 3★), NOT medical_agent alone.
 - Plain IS_ANALYTIC without semantic service terms → Priority 5 (medical_agent only).
 - `genie_chat_tool` is ONLY called when IS_QUANTITATIVE is True and IS_ANALYTIC and IS_SEMANTIC are both False.
 - Do NOT chain genie + vector_search, genie + medical_agent, or all three tools together — these combinations are never correct.
@@ -752,6 +750,7 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
       3. If `findings` is empty (`[]`), tell the user: *"No unusual values were found among the facilities where bed and doctor data is available. However, this could not be checked for the majority of facilities due to missing data."*
       4. NEVER present the raw numbers as proof of wrongdoing — frame it as *"this may need verification"* not *"this is wrong"*.
   • For `regional_coverage` (Unmet Needs):
+      - If `total_facilities` is 0, report this region as a **complete geographic gap** (the queried organization type is entirely absent here).
       - `specialties_missing` is a **pre-computed, definitive SQL list** — report every specialty in it as a **confirmed gap** for that region (these exist elsewhere in the dataset but not here).
       - For `procedures_present` and `equipment_present` (free-text): apply your medical domain knowledge to identify what services or equipment a region of that size and facility count would typically need but appears to lack. These are NOT pre-computed gaps — they require your reasoning.
   • For `deep_validation` (Verifying claims and capabilities):
@@ -1168,72 +1167,146 @@ class _ToolCallTracker:
     def _parse_medical_agent_citations(call_id: str, call_name: str,
                                        call_args: dict, raw_output: str) -> dict[str, Any]:
         """
-        Parse medical_agent_tool output.
-        Returns JSON with a 'findings' array from facility_records and/or facility_facts.
-        Now also extracts latitude/longitude from enriched SQL branches (1, 4, 5, 7, 8).
+        Parse medical_agent_tool output across all SQL branches:
+          Branch 1 (unmet/gap/need)  → type: 'regional_coverage'
+          Branch 2 (outlier/anomaly) → type: 'anomaly_flagging'
+          Branch 3 (deep_validation/mismatch) → type: 'deep_validation'
+          Fallback                   → type: 'general'
+
+        The UCFunctionToolkit may wrap its output as:
+          { "format": "SCALAR", "value": "<json-string>" }
+        The inner value is the SQL to_json() result:
+          { "query": "...", "findings": "[{...}]" }   ← findings is a JSON-encoded string
         """
         sources: list[dict[str, Any]] = []
         tables_accessed: set[str] = {"facility_records"}
+        branch_type: str = "unknown"
+
         try:
-            data = json.loads(raw_output)
-            # UCFunctionToolkit wraps results in {"format": "SCALAR", "value": "<json-string>"}.
-            # Unwrap to get the actual SQL return value before reading any keys.
-            if isinstance(data, dict) and "value" in data and "format" in data:
+            # ── Step 1: parse the outermost JSON layer ──
+            data: Any = raw_output
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    pass  # leave as string; nothing more we can do
+
+            # ── Step 2: unwrap UCFunctionToolkit SCALAR envelope ──
+            # { "format": "SCALAR", "value": "<json-string>" }
+            if isinstance(data, dict) and data.get("format") == "SCALAR" and "value" in data:
                 inner = data["value"]
-                data = json.loads(inner) if isinstance(inner, str) else inner
+                try:
+                    data = json.loads(inner) if isinstance(inner, str) else inner
+                except (json.JSONDecodeError, TypeError):
+                    data = inner  # fallback to raw inner
 
-            # Standard findings (non-deep-validation branches)
-            findings = data.get("findings") or []
-            if isinstance(findings, str):
-                findings = json.loads(findings)
+            if not isinstance(data, dict):
+                # Completely unparseable — return empty but valid citation
+                return {
+                    "step_index": None,
+                    "tool_name": call_name,
+                    "call_id": call_id,
+                    "query_used": call_args.get("query", ""),
+                    "tables_accessed": ["facility_records"],
+                    "sources": [],
+                }
 
-            # validation_summary is now plain text — no structured citations possible.
-            # We skip it here; the Main LLM reads it directly.
-            val_results = []
+            # ── Step 3: parse the findings array ──
+            # The SQL uses to_json(array_agg(...)) so findings is a JSON-encoded string
+            findings_raw = data.get("findings", "[]")
+            try:
+                findings: list = json.loads(findings_raw) if isinstance(findings_raw, str) else findings_raw
+            except (json.JSONDecodeError, TypeError):
+                findings = []
+            if not isinstance(findings, list):
+                findings = []
 
-            all_items = findings + val_results
-
-            for f in all_items:
+            # ── Step 4: dispatch on finding type and build sources ──
+            for f in findings:
                 if not isinstance(f, dict):
                     continue
-                finding_type = f.get("type") or ("deep_validation" if "status" in f else "")
-                # Determine which tables this finding draws from
-                if finding_type in ("contradictory_signals", "feature_mismatch_raw",
-                                    "ngo_raw_data", "ngo_overlap_raw"):
-                    tables_accessed.add("facility_facts")
-                if finding_type in ("regional_coverage",):
-                    tables_accessed.add("regional_insights")
 
-                # ── All other finding types (generic single-facility or regional) ────
-                source: dict[str, Any] = {
-                    "source_type": "facility_records",
-                    "finding_type": finding_type,
-                    "facility_id": f.get("facility_id") or f.get("region"),
-                    "facility_name": f.get("facility_name") or f.get("region"),
-                    "latitude": f.get("latitude"),
-                    "longitude": f.get("longitude"),
-                    "severity": f.get("severity"),
-                    "note": f.get("note") or f.get("reason") or f.get("recommendation"),
-                }
+                finding_type = f.get("type", "general")
+                branch_type = finding_type  # track most recent for branch tag
+
+                # ── Branch 1: regional_coverage (unmet needs / service gaps) ──
                 if finding_type == "regional_coverage":
-                    source["source_type"] = "regional_insights"
-                    source["latitude"] = None
-                    source["longitude"] = None
-                    source["region"] = f.get("region")
-                    source["total_facilities"] = f.get("total_facilities")
-                sources.append(source)
+                    tables_accessed.add("regional_insights")
+                    sources.append({
+                        "source_type": "regional_insights",
+                        "finding_type": finding_type,
+                        "region": f.get("region"),
+                        "total_facilities": f.get("total_facilities"),
+                        "specialties_missing": f.get("specialties_missing"),
+                        "note": f.get("note"),
+                    })
+
+                # ── Branch 2: anomaly_flagging (capacity / doctor outliers) ──
+                elif finding_type == "anomaly_flagging":
+                    source_dict = {
+                        "source_type": "facility_records",
+                        "finding_type": finding_type,
+                        "facility_id": f.get("facility_id"),
+                        "facility_name": f.get("facility_name"),
+                        "city": f.get("city"),
+                        "state": f.get("state"),
+                        "latitude": f.get("latitude"),
+                        "longitude": f.get("longitude"),
+                        "facility_type": f.get("facility_type"),
+                        "measurement": f.get("measurement"),       # 'beds' or 'doctors'
+                        "reported_value": f.get("reported_value"),
+                        "typical_value": f.get("typical_value"),
+                        "flag_type": f.get("flag_type"),
+                        "reason": f.get("reason"),
+                    }
+                    sources.append({k: v for k, v in source_dict.items() if v is not None})
+
+                # ── Branch 3: deep_validation (specialty/procedure/equipment consistency) ──
+                elif finding_type == "deep_validation":
+                    tables_accessed.add("facility_facts")
+                    source_dict = {
+                        "source_type": "facility_records",
+                        "finding_type": finding_type,
+                        "facility_id": f.get("facility_id"),
+                        "facility_name": f.get("facility_name"),
+                        "facility_type": f.get("facility_type"),
+                        "specialties": f.get("specialties"),
+                        "procedures": f.get("procedures"),
+                        "equipment": f.get("equipment"),
+                        "capacity": f.get("capacity"),
+                        "no_doctors": f.get("no_doctors"),
+                        "completeness": f.get("completeness"),  # 'full' / 'partial_no_equipment' / etc.
+                    }
+                    sources.append({k: v for k, v in source_dict.items() if v is not None})
+
+                # ── General / fallback findings ──
+                else:
+                    source_dict = {
+                        "source_type": "facility_records",
+                        "finding_type": finding_type,
+                        "facility_id": f.get("facility_id") or f.get("region"),
+                        "facility_name": f.get("facility_name") or f.get("region"),
+                        "latitude": f.get("latitude"),
+                        "longitude": f.get("longitude"),
+                        "severity": f.get("severity"),
+                        "note": f.get("note") or f.get("reason") or f.get("recommendation"),
+                    }
+                    sources.append({k: v for k, v in source_dict.items() if v is not None})
+
         except Exception as _med_parse_err:
             import warnings as _w
             _w.warn(
                 f"[CitationParser] medical_agent parse failed (call_id={call_id}): "
                 f"{type(_med_parse_err).__name__}: {_med_parse_err}"
             )
+
         return {
             "step_index": None,
             "tool_name": call_name,
             "call_id": call_id,
             "query_used": call_args.get("query", ""),
             "tables_accessed": sorted(tables_accessed),
+            "branch_type": branch_type,
             "sources": sources,
         }
 
@@ -1412,8 +1485,16 @@ class _ToolCallTracker:
         existing_idx = self._citation_index_by_call_id.get(call_id)
         if existing_idx is not None:
             # Postprocessor replacement: UPDATE the existing citation in-place.
-            # Preserve the original step_index; merge richer data from replacement.
-            citation["step_index"] = self._citations[existing_idx]["step_index"]
+            # Preserve the original step_index.
+            # IMPORTANT: if the new citation has empty sources but the old one had
+            # valid sources (e.g. VS placeholder replacing original 88-fact list),
+            # keep the original sources so citations stay populated.
+            existing = self._citations[existing_idx]
+            old_sources = existing.get("sources", [])
+            new_sources = citation.get("sources", [])
+            citation["step_index"] = existing["step_index"]
+            if not new_sources and old_sources:
+                citation["sources"] = old_sources
             self._citations[existing_idx] = citation
         else:
             # First time seeing this call_id: create a new citation step.

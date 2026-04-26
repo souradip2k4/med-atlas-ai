@@ -24,7 +24,7 @@ CREATE OR REPLACE FUNCTION med_atlas_ai_v2.default.find_facilities_nearby(
 )
 RETURNS STRING
 LANGUAGE SQL
-COMMENT 'Geospatial facility search using ST_DistanceSpheroid on WGS84 spheroid'
+COMMENT 'Returns up to 100 facilities sorted by ascending distance from a reference point using ST_DistanceSpheroid (WGS84 spheroid). Accepts optional scope filters for organization_type, facility_type, operator_type, region, city, and affiliation_type.'
 RETURN (
 
   -- Extract all parameters as scalars once to avoid correlated subquery issues
