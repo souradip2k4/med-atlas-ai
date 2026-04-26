@@ -316,15 +316,18 @@ Written as a **full overwrite** by `populate_facts.py`. Regenerates the complete
 
 Builds a pre-aggregated OLAP analytics table using **PySpark** `groupBy` aggregations on `facility_records`. Designed **exclusively for Text-to-SQL** via Databricks Genie — it is **not** used for Vector Search.
 
-#### Three Aggregation Dimensions
+#### Six Aggregation Dimensions
 
 | #   | `insight_category` | `insight_value`      | `facility_count` | `total_capacity` | `total_doctors` |
 | --- | ------------------ | -------------------- | ---------------- | ---------------- | --------------- |
 | 1   | `overview`         | `all_facilities`     | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
 | 2   | `operator`         | `public` / `private` | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
-| 3   | `specialty`        | e.g. `"cardiology"`  | ✅ countDistinct | `null`\*         | `null`\*        |
+| 3   | `facility_type`    | `clinic`, `hospital`, `farmacy`, `doctor`, `dentist` | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
+| 4   | `organization`     | `facility` / `ngo`   | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
+| 5   | `specialty`        | e.g. `"cardiology"`  | ✅ countDistinct | `null`\*         | `null`\*        |
+| 6   | `affiliation`      | `faith-tradition`, `government`, `community`, `philanthropy-legacy`, `academic` | ✅ countDistinct | `null`\*         | `null`\*        |
 
-> \*`total_capacity` and `total_doctors` are explicitly `NULL` for the `specialty` dimension to prevent statistical overcounting — a hospital with 3 specialties would otherwise contribute its bed count × 3.
+> \*`total_capacity` and `total_doctors` are explicitly `NULL` for array-based dimensions (`specialty`, `affiliation`) to prevent statistical overcounting — a hospital's bed count must not be multiplied by its number of specialties or affiliations.
 
 **Geographic dimensions:** Each aggregation row covers both state-level totals (`city IS NULL`) and city-level breakdowns (`city IS NOT NULL`), so Genie can answer both "how many facilities in Greater Accra?" and "how many facilities specifically in Accra city?" from the same table.
 
@@ -357,6 +360,14 @@ WHERE state = 'Ashanti' AND insight_category = 'operator';
 SELECT state, facility_count FROM regional_insights
 WHERE insight_category = 'specialty' AND insight_value = 'ophthalmology'
 ORDER BY facility_count DESC;
+
+-- "How many government-affiliated clinics are there in Greater Accra?"
+SELECT f.facility_count as total_clinics, a.facility_count as gov_affiliated
+FROM regional_insights f
+JOIN regional_insights a ON f.state = a.state AND f.city = a.city
+WHERE f.state = 'Greater Accra' 
+  AND f.insight_category = 'facility_type' AND f.insight_value = 'clinic'
+  AND a.insight_category = 'affiliation' AND a.insight_value = 'government';
 ```
 
 ---

@@ -17,7 +17,10 @@ Stages
 3. Compute multi-dimensional aggregations:
      - Overview  (total facilities/capacity/doctors per region+city)
      - Operator  (breakdown by operator_type)
+     - Facility Type (breakdown by facility_type)
+     - Organization Type (breakdown by organization_type)
      - Specialty (one row per specialty per region+city)
+     - Affiliation (one row per affiliation_type per region+city)
 4. Write results to regional_insights (full overwrite).
 """
 
@@ -29,7 +32,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import IntegerType
 
 from storage.database import DatabricksDatabase
-from storage.models import FACILITY_RECORDS_SCHEMA, REGIONAL_INSIGHTS_SCHEMA
+from storage.models import REGIONAL_INSIGHTS_SCHEMA
 
 load_dotenv()
 
@@ -58,7 +61,7 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
     base_df = records_df.select(
         "facility_id", "country", "state", "city",
         "capacity", "no_doctors", "operator_type",
-        "specialties", "procedures", "equipment", "capabilities",
+        "specialties", "organization_type", "facility_type", "affiliation_types",
     )
 
     insights_dfs = []
@@ -98,6 +101,46 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
     )
     insights_dfs.append(operator_df)
 
+    # ── 3. FACILITY TYPE ──────────────────────────────────────────────────────
+    logger.info("Computing facility_type aggregation...")
+    facility_type_df = (
+        base_df
+        .filter(F.col("facility_type").isNotNull())
+        .groupBy("country", "state", "city", "facility_type")
+        .agg(
+            F.countDistinct("facility_id").alias("facility_count"),
+            F.sum("capacity").alias("total_capacity"),
+            F.sum("no_doctors").alias("total_doctors"),
+        )
+    )
+    facility_type_df = facility_type_df.select(
+        "country", "state", "city",
+        F.lit("facility_type").alias("insight_category"),
+        F.col("facility_type").alias("insight_value"),
+        "facility_count", "total_capacity", "total_doctors",
+    )
+    insights_dfs.append(facility_type_df)
+
+    # ── 4. ORGANIZATION TYPE ──────────────────────────────────────────────────
+    logger.info("Computing organization_type aggregation...")
+    org_type_df = (
+        base_df
+        .filter(F.col("organization_type").isNotNull())
+        .groupBy("country", "state", "city", "organization_type")
+        .agg(
+            F.countDistinct("facility_id").alias("facility_count"),
+            F.sum("capacity").alias("total_capacity"),
+            F.sum("no_doctors").alias("total_doctors"),
+        )
+    )
+    org_type_df = org_type_df.select(
+        "country", "state", "city",
+        F.lit("organization").alias("insight_category"),
+        F.col("organization_type").alias("insight_value"),
+        "facility_count", "total_capacity", "total_doctors",
+    )
+    insights_dfs.append(org_type_df)
+
     # ── Helper: explode array column and aggregate ───────────────────────────
     def _explode_and_agg(column_name: str, category_name: str):
         """Explode an array column and count facilities per distinct value."""
@@ -118,7 +161,7 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
             F.lit(None).cast(IntegerType()).alias("total_doctors"),
         )
 
-    # ── 3. SPECIALTIES ───────────────────────────────────────────────────────
+    # ── 5. SPECIALTIES ───────────────────────────────────────────────────────
     # camelCase enum values — groups deterministically, unlike free-text strings.
     # NOTE: procedure, equipment, and capability columns are excluded because
     # those are free-text strings that generate noisy duplicates
@@ -126,6 +169,10 @@ def compute_regional_insights(db: DatabricksDatabase) -> None:
     # Genie Chat handles procedure/equipment queries directly via facility_records.
     logger.info("Computing specialty aggregation...")
     insights_dfs.append(_explode_and_agg("specialties", "specialty"))
+
+    # ── 6. AFFILIATION ────────────────────────────────────────────────────────
+    logger.info("Computing affiliation aggregation...")
+    insights_dfs.append(_explode_and_agg("affiliation_types", "affiliation"))
 
     # ── Union all slices ─────────────────────────────────────────────────────
     logger.info("Unioning aggregation slices...")
