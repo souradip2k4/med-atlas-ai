@@ -84,8 +84,7 @@ from mlflow.types.responses import (
     to_chat_completions_input,
 )
 from mlflow.types.responses_helpers import (
-    Content,
-    ResponseOutputText,
+    Content
 )
 
 # Databricks integrations
@@ -109,7 +108,51 @@ if not GEOSPATIAL_UC_FUNCTION_NAME and CATALOG and SCHEMA:
     GEOSPATIAL_UC_FUNCTION_NAME = f"{CATALOG}.{SCHEMA}.find_facilities_nearby"
 
 
+# ─── Domain constants ──────────────────────────────────────────────────────────
+
+GHANA_REGIONS: list[str] = [
+    "Ahafo", "Greater Accra", "Western", "Eastern", "Ashanti",
+    "Volta", "Central", "Bono East", "Northern", "Western North",
+    "Oti", "Bono", "North East", "Savannah", "Upper West", "Upper East",
+]
+
+# Critical life-saving procedures used as the VS query in cold-spot analysis.
+# Covers high-burden interventions most frequently absent in low-resource settings.
+CRITICAL_PROCEDURES: list[str] = [
+    "caesarean section",
+    "blood transfusion",
+    "open heart surgeries",
+    "kidney transplant surgeries",
+    "renal dialysis treatment",
+    "cataract surgery",
+    "cornea transplant",
+    "vitrectomy",
+    "obstetric fistula repair",
+    "laparotomy for ectopic gestations",
+    "endoscopic retrograde cholangiopancreatography (ERCP)",
+    "glaucoma surgeries",
+    "general surgery",
+    "safe abortion and post-abortion care",
+    "anaesthesia services",
+]
+
+# Single VS query string that finds facilities offering ANY critical procedure.
+_COLD_SPOT_PROCEDURE_QUERY: str = " ".join(CRITICAL_PROCEDURES)
+
+# Human-message keywords that signal a cold-spot (ABSENCE) query vs. a standard
+# GEO+SEMANTIC (PRESENCE) query. Checked by the postprocessor.
+_COLD_SPOT_KEYWORDS: frozenset[str] = frozenset([
+    "cold spot", "cold-spot", "coldspot",
+    "absent", "absence", "lacking",
+    "no access", "coverage gap",
+    "procedure missing", "service absent",
+    "travel time", "hours away",
+    "where is", "where are there no",
+])
+
+
 # ─── Tool 1 — Genie Chat ──────────────────────────────────────────────────────
+
 
 @tool
 def genie_chat_tool(query: str) -> str:
@@ -197,13 +240,20 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
     if fact_types and len(fact_types) == 1:
         kwargs["filters"] = {"fact_type": fact_types[0]}
     elif fact_types and len(fact_types) > 1:
-        kwargs["filters"] = {"fact_type": {"$in": fact_types}}
+        # Databricks VS multi-value filter: pass list directly as the value (NOT MongoDB $in syntax)
+        kwargs["filters"] = {"fact_type": fact_types}
 
     post_filter_types = set(fact_types) if fact_types and len(fact_types) > 1 else None
 
     try:
         vs = VectorSearchRetrieverTool(**kwargs)
         results = vs.invoke({"query": query})
+        
+        print("\n" + "="*80)
+        print("DEBUG: RAW VS INVOKE RESULTS (before JSON structuring):")
+        print(results)
+        print("="*80 + "\n")
+        
         if post_filter_types and isinstance(results, list):
             results = [
                 doc for doc in results
@@ -467,82 +517,150 @@ def medical_agent_tool(
 
 @tool
 def geospatial_query_tool(
-    ref_lat: float = 0.0,
-    ref_lon: float = 0.0,
-    reference_location: str | None = None,
+    reference_location: str,
     radius_km: float = 50.0,
-    region: str | None = None,
-    city: str | None = None,
+    facility_type: str | None = None,
     operator_type: str | None = None,
     organization_type: str | None = None,
-    facility_type: str | None = None,
     affiliation_type: str | None = None,
+    scan_all_ghana_regions: bool = False,
 ) -> str:
     """
     Geospatial facility search using ST_DistanceSpheroid on the WGS84 spheroid.
+    Geocodes `reference_location` via LocationIQ to obtain precise lat/lon,
+    then queries the Unity Catalog SQL function for all facilities within radius_km.
 
     Returns: A list of up to 100 facilities within radius_km, sorted by ascending distance.
 
-    SCOPE FILTERS (all optional — apply ONLY what the user explicitly mentioned):
-        region:            Restrict to a specific state/region (e.g., 'Greater Accra').
-        city:              Restrict to a specific city.
-        operator_type:     'private' | 'public'
-        organization_type: 'facility' | 'ngo'
-        facility_type:     'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
-        affiliation_type:  'faith-tradition' | 'government' | 'community' |
-                           'philanthropy-legacy' | 'academic'
-
     Args:
-        ref_lat:            Latitude of reference location (optional, if known).
-        ref_lon:            Longitude of reference location (optional, if known).
-        reference_location: Name of the reference city/region (e.g., "Accra").
-                            The tool will dynamically geocode this if provided!
-        radius_km:          Search radius in kilometres (default 50).
+        reference_location:       REQUIRED. Name of the city or region to center the search on
+                                  (e.g., "Accra", "Kumasi", "Volta region"). The tool
+                                  geocodes this automatically via LocationIQ — do NOT pass
+                                  raw lat/lon coordinates.
+        radius_km:                Search radius in kilometres (default 50).
+        facility_type:            Optional. 'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'.
+                                  Only pass if the user explicitly mentioned this.
+        operator_type:            Optional. 'private' | 'public'.
+                                  Only pass if the user explicitly mentioned this.
+        organization_type:        Optional. 'facility' | 'ngo'.
+                                  Only pass if the user explicitly mentioned this.
+        affiliation_type:         Optional. 'faith-tradition' | 'government' | 'community' |
+                                  'philanthropy-legacy' | 'academic'.
+                                  Only pass if the user explicitly mentioned this.
+        scan_all_ghana_regions:   Set to True for global cold-spot analysis when the user
+                                  asks about cold spots across ALL of Ghana without specifying
+                                  a particular location. Geocodes each of the 16 Ghana
+                                  regional capitals via LocationIQ and returns the
+                                  deduplicated union of all facilities within radius_km of each.
+
+    CRITICAL: NEVER pass ref_lat or ref_lon — those parameters no longer exist.
+    Always pass `reference_location` as a plain string from the user’s prompt.
 
     Trigger keywords: "within", "km", "distance", "near", "nearby", "closest",
     "cold spot", "geographic", "radius", "proximity", "urban", "rural".
     """
     from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
     import requests
+    import time
     import os
 
-    # Dynamically geocode reference_location if ref_lat/lon not provided
-    if reference_location and ref_lat == 0.0 and ref_lon == 0.0:
+    # ── GLOBAL SCAN MODE ─────────────────────────────────────────────────────────
+    # When scan_all_ghana_regions=True, geocode all 16 Ghana regions and return
+    # the deduplicated union of all facilities found within radius_km of each.
+    if scan_all_ghana_regions:
         api_key = os.getenv("LOCATION_IQ_ACCESS_TOKEN")
         if not api_key:
-            return "[Geospatial Query Error] LOCATION_IQ_ACCESS_TOKEN not set in environment."
-        try:
-            resp = requests.get(
-                "https://us1.locationiq.com/v1/search",
-                params={"key": api_key, "q": f"{reference_location}, Ghana", "format": "json"},
-                timeout=5
-            )
-            if resp.status_code == 200 and len(resp.json()) > 0:
-                ref_lat = float(resp.json()[0]["lat"])
-                ref_lon = float(resp.json()[0]["lon"])
-            else:
-                return f"[Geospatial Query Error] Could not dynamically geocode '{reference_location}'."
-        except Exception as e:
-            return f"[Geospatial Query Error] Geocoding failed: {e}"
+            return "[Geospatial Query Error] LOCATION_IQ_ACCESS_TOKEN not set."
+
+        all_facilities_by_id: dict[str, dict] = {}
+        regions_successful: list[str] = []
+        regions_failed: list[str] = []
+
+        for _region in GHANA_REGIONS:
+            try:
+                _resp = requests.get(
+                    "https://us1.locationiq.com/v1/search",
+                    params={"key": api_key, "q": f"{_region} region, Ghana", "format": "json"},
+                    timeout=5,
+                )
+                time.sleep(0.5)  # rate-limit guard: stay within 2 req/sec
+                if _resp.status_code != 200 or not _resp.json():
+                    regions_failed.append(_region)
+                    continue
+                _lat = float(_resp.json()[0]["lat"])
+                _lon = float(_resp.json()[0]["lon"])
+            except Exception:
+                regions_failed.append(_region)
+                continue
+
+            _payload: dict = {"ref_lat": _lat, "ref_lon": _lon, "radius_km": radius_km}
+            if operator_type:     _payload["operator_type"]     = operator_type
+            if organization_type: _payload["organization_type"] = organization_type
+            if facility_type:     _payload["facility_type"]     = facility_type
+            if affiliation_type:  _payload["affiliation_type"]  = affiliation_type
+
+            try:
+                if not GEOSPATIAL_UC_FUNCTION_NAME:
+                    continue
+                _uc = UCFunctionToolkit(function_names=[GEOSPATIAL_UC_FUNCTION_NAME])
+                _raw = _uc.tools[0].invoke({"query_json": json.dumps(_payload)})
+                _outer = json.loads(_raw)
+                if isinstance(_outer, dict) and "value" in _outer and "format" in _outer:
+                    _inner = _outer["value"]
+                    _outer = json.loads(_inner) if isinstance(_inner, str) else _inner
+                _facs_raw = _outer.get("facilities", [])
+                if isinstance(_facs_raw, str):
+                    _facs_raw = json.loads(_facs_raw)
+                for _fac in (_facs_raw if isinstance(_facs_raw, list) else []):
+                    _fid = _fac.get("facility_id")
+                    if _fid and _fid not in all_facilities_by_id:
+                        all_facilities_by_id[_fid] = _fac
+                regions_successful.append(_region)
+            except Exception:
+                regions_failed.append(_region)
+                continue
+
+        facilities_list = list(all_facilities_by_id.values())
+        return json.dumps({
+            "scan_type":                "all_ghana_regions",
+            "radius_km":               radius_km,
+            "regions_scanned":         regions_successful,
+            "regions_failed":          regions_failed,
+            "total_facilities_returned": len(facilities_list),
+            "facilities":              facilities_list,
+        }, indent=2)
+
+    # ── SINGLE LOCATION MODE (geocoding always mandatory) ────────────────────────
+    # Always geocode the reference_location string via LocationIQ.
+    # The LLM must NEVER pass ref_lat/ref_lon directly.
+    api_key = os.getenv("LOCATION_IQ_ACCESS_TOKEN")
+    if not api_key:
+        return "[Geospatial Query Error] LOCATION_IQ_ACCESS_TOKEN not set in environment."
+    try:
+        resp = requests.get(
+            "https://us1.locationiq.com/v1/search",
+            params={"key": api_key, "q": f"{reference_location}, Ghana", "format": "json"},
+            timeout=5,
+        )
+        time.sleep(0.5)  # rate-limit guard: stay within 2 req/sec
+        if resp.status_code == 200 and len(resp.json()) > 0:
+            ref_lat = float(resp.json()[0]["lat"])
+            ref_lon = float(resp.json()[0]["lon"])
+        else:
+            return f"[Geospatial Query Error] Could not dynamically geocode '{reference_location}'."
+    except Exception as e:
+        return f"[Geospatial Query Error] Geocoding failed: {e}"
 
     payload: dict = {
-        "ref_lat":       ref_lat,
-        "ref_lon":       ref_lon,
-        "radius_km":     radius_km,
+        "ref_lat":   ref_lat,
+        "ref_lon":   ref_lon,
+        "radius_km": radius_km,
     }
-    # Scope filters — propagate only when user explicitly mentioned them
-    if region:
-        payload["region"] = region
-    if city:
-        payload["city"] = city
-    if operator_type:
-        payload["operator_type"] = operator_type
-    if organization_type:
-        payload["organization_type"] = organization_type
-    if facility_type:
-        payload["facility_type"] = facility_type
-    if affiliation_type:
-        payload["affiliation_type"] = affiliation_type
+    # Attribute-level scope filters only (no city/region — geocoordinates handle geography)
+    if facility_type:     payload["facility_type"]     = facility_type
+    if operator_type:     payload["operator_type"]     = operator_type
+    if organization_type: payload["organization_type"] = organization_type
+    if affiliation_type:  payload["affiliation_type"]  = affiliation_type
 
     try:
         if not GEOSPATIAL_UC_FUNCTION_NAME:
@@ -643,19 +761,36 @@ IS_ANALYTIC = True if ANY of these keywords appear:
   "classify", "categorize", "breakdown", "ngo", "classification",
   "procedure.*equipment", "equipment.*procedure"
 
-### Step 2 — Route by priority (pick the SINGLE highest-priority tool; only the three starred pipelines use multiple tools):
+IS_COLDSPOT = True if ALL of these conditions hold:
+  (a) IS_GEOSPATIAL is True (a radius/distance/location is mentioned)
+  AND
+  (b) ANY of these absence-keywords appear:
+      "cold spot", "cold-spot", "coldspot", "absent", "absence",
+      "lacking", "no access", "coverage gap", "procedure missing",
+      "service absent", "travel time", "hours away"
+  AND
+  (c) The user is asking which areas LACK a procedure/service (not which areas have it).
+
+  KEY DISAMBIGUATION (IS_COLDSPOT vs IS_GEOSPATIAL + IS_SEMANTIC):
+    "hospitals within 200km that HAVE X-ray" → IS_GEOSPATIAL + IS_SEMANTIC (Priority 2★)
+    "cold spots / where X-ray is ABSENT within 200km" → IS_COLDSPOT (Priority 1★)
+
+### Step 2 — Route by priority (pick the SINGLE highest-priority tool; only the four starred pipelines use multiple tools):
 
 | Priority | Classification                  | Tool to Use                                                               |
 |----------|---------------------------------|---------------------------------------------------------------------------|
-| 1 ★      | IS_GEOSPATIAL + IS_SEMANTIC     | geospatial_query_tool → vector_search_tool (intersection pipeline below)  |
-| 2 ★      | IS_GEOSPATIAL + IS_ANALYTIC     | geospatial_query_tool → medical_agent_tool (facility_ids pipeline below)  |
-| 3        | IS_GEOSPATIAL only              | geospatial_query_tool                                                     |
-| 4        | IS_ANALYTIC (any combo)         | medical_agent_tool                                                        |
-| 5        | IS_SEMANTIC only                | vector_search_tool                                                        |
-| 6        | IS_QUANTITATIVE only            | genie_chat_tool                                                           |
+| 1 ★      | IS_COLDSPOT                     | geospatial_query_tool → vector_search_tool (Cold-Spot pipeline below)    |
+| 2 ★      | IS_GEOSPATIAL + IS_SEMANTIC     | geospatial_query_tool → vector_search_tool (intersection pipeline below)  |
+| 3 ★      | IS_GEOSPATIAL + IS_ANALYTIC     | geospatial_query_tool → medical_agent_tool (facility_ids pipeline below)  |
+| 4        | IS_GEOSPATIAL only              | geospatial_query_tool                                                     |
+| 5        | IS_ANALYTIC (any combo)         | medical_agent_tool                                                        |
+| 6        | IS_SEMANTIC only                | vector_search_tool                                                        |
+| 7        | IS_QUANTITATIVE only            | genie_chat_tool                                                           |
 
 **CRITICAL rules:**
-- IS_GEOSPATIAL always takes top priority when present.
+- IS_COLDSPOT is highest priority when both IS_GEOSPATIAL is True AND absence keywords are present.
+- IS_GEOSPATIAL + IS_SEMANTIC (Priority 2★): geospatial + a service the user wants facilities to HAVE.
+- IS_COLDSPOT (Priority 1★): geospatial + asking where a service is ABSENT.
 - Plain IS_ANALYTIC without semantic service terms → Priority 5 (medical_agent only).
 - `genie_chat_tool` is ONLY called when IS_QUANTITATIVE is True and IS_ANALYTIC and IS_SEMANTIC are both False.
 - Do NOT chain genie + vector_search, genie + medical_agent, or all three tools together — these combinations are never correct.
@@ -684,15 +819,102 @@ explicitly asked for. Always pick the minimal relevant set.
 
 ### Step 2.5 — Geospatial Protocol (applies when IS_GEOSPATIAL = True):
 
-If the user asks for a physical distance search (e.g., "within 50 km of Accra"), you do NOT need to look up exact coordinates.
-Simply pass `reference_location="Accra"` to the `geospatial_query_tool`, and it will dynamically fetch the latitude/longitude for you!
-Always provide `reference_location` and `radius_km` when the user asks for facilities "near" a location or "within X km".
+**CRITICAL RULES for `geospatial_query_tool`:**
+1. Always pass `reference_location` as a plain location name string (e.g., `"Accra"`, `"Kumasi"`, `"Volta region"`).
+   The tool geocodes this via LocationIQ internally — you must NEVER supply raw coordinates. `ref_lat`/`ref_lon` no longer exist.
+   ✅ `geospatial_query_tool(reference_location="Accra", radius_km=200)`
+   ❌ `geospatial_query_tool(ref_lat=5.6, ref_lon=-0.1, radius_km=200)`
+
+2. Do NOT pass `city` or `region` as separate parameters. The geocoded lat/lon already handles geographic
+   resolution — adding a city/region string filter ON TOP of a radius double-restricts results incorrectly.
+   ✅ `geospatial_query_tool(reference_location="Kumasi", radius_km=50, facility_type="hospital")`
+   ❌ `geospatial_query_tool(reference_location="Kumasi", radius_km=50, city="Kumasi")`
+
+3. Only pass `facility_type`, `operator_type`, `organization_type`, or `affiliation_type` when the user
+   explicitly mentioned them. These attribute filters are applied ON TOP of the distance filter.
+
 The tool returns up to 100 facilities sorted by ascending distance.
+
+**IS_COLDSPOT Pipeline (Priority 1★ — e.g., "cold spots where critical procedure is absent within X km"):**
+When IS_COLDSPOT = True:
+
+  **Case A — Location IS specified** (e.g., "cold spots within 50km of Accra"):
+  1. Call `geospatial_query_tool` with `reference_location="Accra"` and `radius_km=50`.
+  2. Call `vector_search_tool` with the critical-procedures query (see below) and `fact_types=["procedure", "equipment"]`.
+  3. Postprocessor produces `GEO_COLDSPOT_ANALYSIS` — use BOTH fields for your answer:
+       - `matched_facilities[]`   → the facilities that ARE covered (have at least one critical procedure)
+       - `cold_spot_by_region{}` → region-level counts of covered vs uncovered facilities
+
+  **Case B — No location specified** (e.g., "where are the largest cold spots within 50km"):
+  DO NOT ask the user for a location. Instead:
+  1. Call `geospatial_query_tool` with `scan_all_ghana_regions=True` and `radius_km=<user_value_or_50>`.
+     This internally geocodes all 16 Ghana regions and returns the deduplicated union of all
+     facilities found within radius_km of each regional capital.
+  2. Call `vector_search_tool` with the critical-procedures query and `fact_types=["procedure", "equipment"]`.
+  3. Postprocessor produces `GEO_COLDSPOT_ANALYSIS` — use BOTH fields for your answer:
+       - `matched_facilities[]`   → the facilities that ARE covered (have at least one critical procedure)
+       - `cold_spot_by_region{}` → region-level counts of covered vs uncovered facilities
+
+  **Critical-procedures VS query for all IS_COLDSPOT calls:**
+       query      = "caesarean section blood transfusion open heart surgeries kidney transplant surgeries
+                     renal dialysis treatment cataract surgery cornea transplant vitrectomy
+                     obstetric fistula repair laparotomy for ectopic gestations
+                     endoscopic retrograde cholangiopancreatography glaucoma surgeries
+                     general surgery safe abortion and post-abortion care anaesthesia services"
+       fact_types = ["procedure", "equipment"]
+
+  **Default radius_km**: 50km if the user did not specify a distance.
+  The `vector_search_tool` result will contain only a short system note — ignore it entirely.
+  CRITICAL: NEVER call `medical_agent_tool` for cold-spot queries.
+
+  **HOW TO FORMAT YOUR COLD-SPOT RESPONSE (mandatory structure):**
+
+  Your response MUST contain ALL of the following sections:
+
+  **Section 1 — Overall Summary**
+  State total facilities in radius, how many are covered vs cold spots, and the overall coverage %.
+
+  **Section 2 — Regional Gap Table**
+  A markdown table using `cold_spot_by_region` showing: Region | Facilities in radius | Covered | Cold spots | Coverage %.
+  Sort by cold_spot count descending (largest gaps first).
+
+  **Section 3 — Covered Facilities & Top Cold-Spot Facilities per Region**
+
+  **3a — Covered Facilities ("Islands of Coverage")**
+  List EVERY facility from `matched_facilities[]` that IS providing a critical procedure.
+  For each covered facility, state:
+    - Facility name, city, region, distance_km
+    - The specific critical procedure(s) it provides — extract this from `matched_facts[].fact_text` in the facility object.
+  Group by region. Example:
+    **Greater Accra (8 covered)**
+    - Korle Bu Teaching Hospital, Accra — 2.1 km — Provides: caesarean section, blood transfusion, general surgery
+
+  **3b — Top Cold-Spot Facilities per Region ("Nearest Gaps")**
+  Use `top_cold_spots_per_region{}` to list the 5 nearest uncovered facilities in EACH region.
+  For each cold-spot facility, state:
+    - Facility name, city, facility type, distance_km
+    - They are cold spots because: they have NO critical procedure documented
+  This helps the user understand WHICH specific facilities are the largest gaps nearest to people.
+  Example:
+    **Ashanti — Top 5 nearest cold spots (104 total cold spots)**
+    - Kumasi South Hospital, Kumasi — clinic — 3.2 km — No critical procedure documented
+    - ... etc
+  If a region has 0 covered facilities (total cold-spot), emphasize that prominently.
+
+  **Section 4 — Key Observations & Implications**
+  Synthesize the regional pattern: which regions are total cold spots (0 covered), which are partially covered,
+  and what investment priorities would close the largest gaps.
 
 **IS_GEOSPATIAL + IS_SEMANTIC Pipeline (CRITICAL — e.g., "hospitals within 200km providing X-ray"):**
 When the query is BOTH geospatial AND semantic:
   1. Call `geospatial_query_tool` to get ALL facilities within the specified radius (no condition parameter needed).
-  2. Call `vector_search_tool` with the semantic query (e.g., "Provides X-ray imaging").
+  2. Call `vector_search_tool` with the semantic query and a SINGLE appropriate fact_type:
+       - Use `fact_types=["procedure"]` for queries about what a facility DOES (surgeries, treatments, procedures)
+       - Use `fact_types=["equipment"]` for queries about physical devices/machines (X-ray machine, MRI, CT scanner)
+       - Use `fact_types=["specialty"]` for queries about medical specialties
+       - NEVER pass multiple fact_types for IS_GEOSPATIAL+IS_SEMANTIC — always pick the single best match.
+       Example: "hospitals providing X-ray imaging" → query="provides X-ray imaging", fact_types=["procedure"]
+       Example: "facilities with MRI scanner" → query="has MRI scanner", fact_types=["equipment"]
   3. The Python postprocessor AUTOMATICALLY performs the facility_id set intersection between the two tool
      results. You do NOT need to match, filter, or compare IDs manually.
   4. You will receive the `geospatial_query_tool` result replaced with a JSON tagged
@@ -763,10 +985,22 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
       2. Read `validation_summary`. Group facilities by severity: **high** → **medium** → **low**.
       3. Apply the **Handling Large Results** rules from Step 4 to pick table vs. high-level summary.
       4. If `validation_summary` says "No anomalies detected", state this clearly.
+  • For `GEO_COLDSPOT_ANALYSIS` (Cold-Spot / Procedure Absence):
+      The postprocessor has pre-classified all facilities within the radius.
+      1. Start with a one-line coverage summary:
+         "Within [radius_km] km of [location]: [geo_total] facilities found.
+          [cold_spot_count] ([100-coverage_pct]%) have NO access to any critical procedure."
+      2. Show `cold_spot_facilities[]` in a Markdown table sorted by distance (nearest first):
+         | Facility Name | Type | City | Region | Distance (km) |
+         Cap at 100 rows. These are the geographic gaps.
+      3. After the table, group cold spots by `state` field and count per region.
+         Name the most severely underserved regions (most cold spots or furthest from coverage).
+      4. Optionally show top-10 `covered_facilities` for contrast in a separate section.
+      5. NEVER include `facility_id` UUIDs in your response.
 
 ### Step 3 — Multi-tool orchestration:
 
-Only three approved multi-tool pipelines exist (GEO+SEMANTIC, GEO+ANALYTIC, and SEMANTIC+ANALYTIC — see Step 2.5).
+Only four approved multi-tool pipelines exist (IS_COLDSPOT, GEO+SEMANTIC, GEO+ANALYTIC, and SEMANTIC+ANALYTIC — see Step 2.5).
 For all other query types, a single tool is sufficient. Rules:
   • Call the single highest-priority tool for the query. Once it returns valid data (even empty results), synthesize the final answer — do NOT call additional tools.
   • If a tool returns an error → try the next most appropriate tool as a one-time fallback only.
@@ -811,6 +1045,11 @@ For all other query types, a single tool is sufficient. Rules:
 
 ### Step 5 — Missing Information:
 If the user asks a question that requires a region or city (such as finding nearby facilities, generating a specific regional anomaly report, or filtering by distance) but they DO NOT mention any region or city in their prompt, you MUST explicitly ask the user to provide the region or city before proceeding. Do NOT assume a default region. Use your interactive capability to clarify their request.
+
+**Exception — IS_COLDSPOT queries**: Cold-spot analysis is global by design and does NOT require
+a specific location. If IS_COLDSPOT is True and no location is mentioned, call
+`geospatial_query_tool` with `scan_all_ghana_regions=True` and `radius_km=<user_value_or_50>`.
+Never ask the user for a location in this case.
 """
 
 
@@ -879,15 +1118,23 @@ def tool_postprocessor(state: AgentState) -> dict:
         return {"messages": []}
 
     # Guard: skip if these specific messages were already intersected
-    if ("GEO_SEMANTIC_INTERSECTION" in (geo_msg.content or "") or 
-        "[Intersection performed" in (vs_msg.content or "")):
+    if ("GEO_SEMANTIC_INTERSECTION" in (geo_msg.content or "") or
+        "GEO_COLDSPOT_ANALYSIS"     in (geo_msg.content or "") or
+        "[Intersection performed"   in (vs_msg.content or "")):
         return {"messages": []}
+
+    # Log raw messages to debug VS tool returns mapping
+    print("\n" + "="*80)
+    print("DEBUG: RAW VS_MSG CONTENT:")
+    print(vs_msg.content)
+    print("="*80 + "\n")
 
     # Parse both JSON tool outputs
     try:
         geo_data = json.loads(geo_msg.content)
         vs_data  = json.loads(vs_msg.content)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError) as e:
+        print(f"DEBUG: JSONDecodeError parsing tool outputs: {e}")
         # Unparseable — pass through unchanged, let LLM handle it as-is
         return {"messages": []}
 
@@ -901,7 +1148,7 @@ def tool_postprocessor(state: AgentState) -> dict:
         if "facility_id" in f
     }
 
-    # Build lookup: facility_id → list of matched semantic facts
+    # Build lookup: facility_id → list of matched semantic facts (from the VS ToolMessage)
     vs_by_id: dict[str, list[dict]] = {}
     for r in vs_results:
         fid = r.get("facility_id", "")
@@ -911,13 +1158,23 @@ def tool_postprocessor(state: AgentState) -> dict:
                 "fact_text": r.get("fact_text", ""),
             })
 
-    # Python set intersection on facility_id
-    common_ids = set(geo_by_id.keys()) & set(vs_by_id.keys())
+    # Detect cold-spot intent from the first HumanMessage in state.
+    # Cold-spot = user asking WHERE a procedure is ABSENT (not which facilities have it).
+    _human_query_lower = ""
+    for _msg in messages:
+        if isinstance(_msg, HumanMessage):
+            _human_query_lower = (_msg.content or "").lower()
+            break
+    _is_cold_spot = any(kw in _human_query_lower for kw in _COLD_SPOT_KEYWORDS)
 
-    matched: list[dict] = []
-    for fid in common_ids:
+    # Python set operations on facility_id
+    common_ids    = set(geo_by_id.keys()) & set(vs_by_id.keys())
+    cold_spot_ids = set(geo_by_id.keys()) - common_ids  # in radius, no VS procedure match
+
+    def _build_geo_entry(fid: str) -> dict:
+        """Base facility entry from geo data (lat/lon/distance already present)."""
         geo_f = geo_by_id[fid]
-        matched.append({
+        return {
             "facility_id":   fid,
             "facility_name": geo_f.get("facility_name", ""),
             "facility_type": geo_f.get("facility_type", ""),
@@ -928,44 +1185,112 @@ def tool_postprocessor(state: AgentState) -> dict:
             "specialties":   geo_f.get("specialties", ""),
             "procedures":    geo_f.get("procedures", ""),
             "equipment":     geo_f.get("equipment", ""),
-            "matched_facts": vs_by_id[fid],
-        })
+        }
 
-    # Sort by ascending distance (nearest first)
+    # Build the intersection list (same logic for BOTH cold-spot and standard 2★)
+    matched: list[dict] = []
+    for fid in common_ids:
+        entry = _build_geo_entry(fid)
+        entry["matched_facts"] = vs_by_id[fid]
+        matched.append(entry)
     matched.sort(key=lambda x: x.get("distance_km") or 9999)
 
-    merged: dict = {
-        "pipeline":           "GEO_SEMANTIC_INTERSECTION",
-        "geo_total":          len(geo_facilities),
-        "semantic_total":     len(vs_results),
-        "matched_count":      len(matched),
-        "reference_lat":      geo_data.get("reference_lat"),
-        "reference_lon":      geo_data.get("reference_lon"),
-        "radius_km":          geo_data.get("radius_km"),
-        "matched_facilities": matched,
-    }
+    if _is_cold_spot:
+        # ── Cold-Spot Analysis ─────────────────────────────────────────────────
+        # Same intersection as 2★, but with cold-spot metadata.
+        # ONLY matched_facilities (the intersection) is passed to the LLM.
+        # Cold spots are summarized as region-level counts — NOT full facility objects.
+        total_in_radius = len(geo_facilities)
+        coverage_pct = round(
+            100 * len(matched) / total_in_radius, 1
+        ) if total_in_radius > 0 else 0.0
 
-    # Log a dedicated MLflow span for the intersection so the pre-replacement stats
-    # (raw geo_total / semantic_total) remain traceable even after the ToolMessage
-    # content is replaced by add_messages. mlflow.langchain.autolog() only records the
-    # FINAL state of each message, so without this span the original 100-facility payload
-    # from geospatial_query_tool would be invisible in the MLflow trace.
+        # Compute region-level cold-spot summary (lightweight, no per-facility detail)
+        geo_regions: dict[str, int] = {}
+        for fid in geo_by_id:
+            region = geo_by_id[fid].get("state", "Unknown")
+            geo_regions[region] = geo_regions.get(region, 0) + 1
+
+        covered_regions: dict[str, int] = {}
+        for fid in common_ids:
+            region = geo_by_id[fid].get("state", "Unknown")
+            covered_regions[region] = covered_regions.get(region, 0) + 1
+
+        cold_spot_by_region: dict[str, dict] = {}
+        for region, total in geo_regions.items():
+            covered = covered_regions.get(region, 0)
+            gap = total - covered
+            if gap > 0:
+                cold_spot_by_region[region] = {
+                    "facilities_in_region": total,
+                    "covered": covered,
+                    "cold_spots": gap,
+                }
+
+        # Build top-5 nearest cold-spot facilities per region (lightweight — name/city/distance only)
+        # This avoids passing all 311 cold-spot records while still giving the LLM individual facility names.
+        cold_spot_by_region_facilities: dict[str, list[dict]] = {}
+        for fid in cold_spot_ids:
+            geo_f = geo_by_id[fid]
+            region = geo_f.get("state", "Unknown") or "Unknown"
+            entry = {
+                "facility_name": geo_f.get("facility_name", ""),
+                "facility_type": geo_f.get("facility_type", ""),
+                "city":          geo_f.get("city", ""),
+                "distance_km":   geo_f.get("distance_km"),
+            }
+            cold_spot_by_region_facilities.setdefault(region, []).append(entry)
+
+        # Sort each region's cold-spots by ascending distance, keep top 5
+        top_cold_spots_per_region: dict[str, list[dict]] = {
+            region: sorted(entries, key=lambda x: x.get("distance_km") or 9999)[:5]
+            for region, entries in cold_spot_by_region_facilities.items()
+        }
+
+        merged: dict = {
+            "pipeline":                  "GEO_COLDSPOT_ANALYSIS",
+            "geo_total":                 total_in_radius,
+            "matched_count":             len(matched),
+            "cold_spot_count":           len(cold_spot_ids),
+            "coverage_pct":              coverage_pct,
+            "radius_km":                 geo_data.get("radius_km"),
+            "cold_spot_by_region":       cold_spot_by_region,
+            "top_cold_spots_per_region": top_cold_spots_per_region,
+            "matched_facilities":        matched,
+        }
+    else:
+        # ── Standard GEO_SEMANTIC_INTERSECTION ────────────────────────────────
+        merged = {
+            "pipeline":           "GEO_SEMANTIC_INTERSECTION",
+            "geo_total":          len(geo_facilities),
+            "semantic_total":     len(vs_results),
+            "matched_count":      len(matched),
+            "reference_lat":      geo_data.get("reference_lat"),
+            "reference_lon":      geo_data.get("reference_lon"),
+            "radius_km":          geo_data.get("radius_km"),
+            "matched_facilities": matched,
+        }
+
+    _span_name = "geo_coldspot_analysis" if _is_cold_spot else "geo_semantic_intersection"
     try:
-        with mlflow.start_span(
-            name="geo_semantic_intersection",
-            span_type="CHAIN",
-        ) as span:
+        with mlflow.start_span(name=_span_name, span_type="CHAIN") as span:
             span.set_inputs({
                 "geo_total":     len(geo_facilities),
                 "semantic_total": len(vs_results),
                 "radius_km":     geo_data.get("radius_km"),
-                "reference_lat": geo_data.get("reference_lat"),
-                "reference_lon": geo_data.get("reference_lon"),
+                "is_cold_spot":  _is_cold_spot,
             })
-            span.set_outputs({
-                "matched_count": len(matched),
-                "matched_facility_ids": [m["facility_id"] for m in matched],
-            })
+            if _is_cold_spot:
+                span.set_outputs({
+                    "cold_spot_count":  merged["cold_spot_count"],
+                    "matched_count":    merged["matched_count"],
+                    "coverage_pct":     merged["coverage_pct"],
+                })
+            else:
+                span.set_outputs({
+                    "matched_count":        merged["matched_count"],
+                    "matched_facility_ids": [m["facility_id"] for m in merged["matched_facilities"]],
+                })
     except Exception:
         pass  # never block postprocessor execution due to tracing errors
 

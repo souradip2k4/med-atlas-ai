@@ -6,25 +6,24 @@
 -- Uses Spark SQL ST_DistanceSpheroid for precise geodesic distance on WGS84.
 --
 -- Args: query_json — JSON string with:
---   ref_lat           DOUBLE  — latitude of the reference location
---   ref_lon           DOUBLE  — longitude of the reference location
+--   ref_lat           DOUBLE  — latitude of the reference location (from LocationIQ geocoding)
+--   ref_lon           DOUBLE  — longitude of the reference location (from LocationIQ geocoding)
 --   radius_km         DOUBLE  — search radius in kilometres
 --
--- Scope filters (all optional):
+-- Attribute-scope filters (all optional, applied ON TOP of distance filter):
 --   operator_type     STRING  — 'private' | 'public'
 --   organization_type STRING  — 'facility' | 'ngo'
 --   facility_type     STRING  — 'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
 --   affiliation_type  STRING  — value in affiliation_types array
---   region            STRING  — restrict to fr.state = region
---   city              STRING  — restrict to fr.city = city
+-- NOTE: region and city are NOT accepted — geographic scoping is done via lat/lon + radius_km.
 -- =========================================================================
 
 CREATE OR REPLACE FUNCTION med_atlas_ai_v2.default.find_facilities_nearby(
-  query_json STRING COMMENT 'JSON payload for geospatial lookup. Required keys: ref_lat, ref_lon, radius_km. Optional keys: region, city, operator_type, organization_type, facility_type, affiliation_type.'
+  query_json STRING COMMENT 'JSON payload for geospatial lookup. Required keys: ref_lat (DOUBLE), ref_lon (DOUBLE), radius_km (DOUBLE). Optional attribute filters: operator_type, organization_type, facility_type, affiliation_type. Geographic scoping is done exclusively via lat/lon + radius_km — region and city are not accepted.'
 )
 RETURNS STRING
 LANGUAGE SQL
-COMMENT 'Returns up to 100 facilities sorted by ascending distance from a reference point using ST_DistanceSpheroid (WGS84 spheroid). Accepts optional scope filters for organization_type, facility_type, operator_type, region, city, and affiliation_type.'
+COMMENT 'Returns up to 100 facilities sorted by ascending distance from a reference point using ST_DistanceSpheroid (WGS84 spheroid). The reference lat/lon must be pre-geocoded by the caller (e.g., via LocationIQ). Accepts optional attribute filters: organization_type, facility_type, operator_type, affiliation_type.'
 RETURN (
 
   -- Extract all parameters as scalars once to avoid correlated subquery issues
@@ -33,28 +32,24 @@ RETURN (
       CAST(parse_json(query_json):ref_lat           AS DOUBLE)  AS ref_lat,
       CAST(parse_json(query_json):ref_lon           AS DOUBLE)  AS ref_lon,
       CAST(parse_json(query_json):radius_km         AS DOUBLE)  AS radius_km,
-      -- Scope filter scalars
-      CAST(parse_json(query_json):region            AS STRING)  AS f_region,
-      CAST(parse_json(query_json):city              AS STRING)  AS f_city,
       CAST(parse_json(query_json):operator_type     AS STRING)  AS f_operator_type,
       CAST(parse_json(query_json):organization_type AS STRING)  AS f_organization_type,
       CAST(parse_json(query_json):facility_type     AS STRING)  AS f_facility_type,
       CAST(parse_json(query_json):affiliation_type  AS STRING)  AS f_affiliation_type
   ),
 
-  -- Master scope filter — all optional, NULL = no filter applied
+  -- Attribute scope filter — all optional, NULL = no filter applied
+  -- Geographic scoping is handled exclusively by ST_DistanceSpheroid + radius_km
   scoped_facilities AS (
     SELECT fr.*
     FROM med_atlas_ai.default.facility_records fr
     JOIN global_params gp ON (
       fr.latitude  IS NOT NULL
       AND fr.longitude IS NOT NULL
-      AND (gp.f_region IS NULL OR fr.state = gp.f_region)
-      AND (gp.f_city IS NULL OR fr.city = gp.f_city)
-      AND (gp.f_operator_type IS NULL OR LOWER(fr.operator_type) = LOWER(gp.f_operator_type))
+      AND (gp.f_operator_type     IS NULL OR LOWER(fr.operator_type)     = LOWER(gp.f_operator_type))
       AND (gp.f_organization_type IS NULL OR LOWER(fr.organization_type) = LOWER(gp.f_organization_type))
-      AND (gp.f_facility_type IS NULL OR LOWER(fr.facility_type) = LOWER(gp.f_facility_type))
-      AND (gp.f_affiliation_type IS NULL OR ARRAY_CONTAINS(fr.affiliation_types, gp.f_affiliation_type))
+      AND (gp.f_facility_type     IS NULL OR LOWER(fr.facility_type)     = LOWER(gp.f_facility_type))
+      AND (gp.f_affiliation_type  IS NULL OR ARRAY_CONTAINS(fr.affiliation_types, gp.f_affiliation_type))
     )
   ),
 
