@@ -9,3 +9,4 @@ __pycache__/
 mlruns
 plans
 AGENTS.md
+mlflow.db

@@ -200,7 +200,11 @@ def genie_chat_tool(query: str) -> str:
 # ─── Tool 2 — Vector Search ───────────────────────────────────────────────────
 
 @tool
-def vector_search_tool(query: str, fact_types: list[str] | str | None = None) -> str:
+def vector_search_tool(
+    query: str,
+    fact_types: list[str] | str | None = None,
+    num_results: int = 100,
+) -> str:
     """
     Semantic search over pre-generated facility facts stored in the facility_facts table.
 
@@ -208,21 +212,25 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
     "similar to [name]", specialized services, capabilities, equipment.
 
     Args:
-        query:      Natural language search query
-        fact_types: Optional filter to specific fact types.
-                    Valid values and what each type contains:
-                      - "specialty"   : Medical specialty tags a facility offers
-                                        (e.g., internalMedicine, dentistry, gynecologyAndObstetrics)
-                      - "procedure"   : Specific medical procedures performed in plain text
-                                        (e.g., "Offers teeth whitening", "fertility management")
-                      - "equipment"   : Physical devices/machines on-site
-                                        (e.g., "Automatic changeover oxygen manifold", "operating room equipment")
-                      - "capability"  : Operational context — hours, departments, contact info,
-                                        accreditations, social media, 24/7 availability
-                      - "summary"     : One-line facility profile: type, location, affiliation,
-                                        general description
-                    Pass a list like ["procedure", "equipment"] or a single string like "specialty".
-                    If None, searches across all fact types (use only when cross-type context is needed).
+        query:       Natural language search query
+        fact_types:  Optional filter to specific fact types.
+                     Valid values and what each type contains:
+                       - "specialty"   : Medical specialty tags a facility offers
+                                         (e.g., internalMedicine, dentistry, gynecologyAndObstetrics)
+                       - "procedure"   : Specific medical procedures performed in plain text
+                                         (e.g., "Offers teeth whitening", "fertility management")
+                       - "equipment"   : Physical devices/machines on-site
+                                         (e.g., "Automatic changeover oxygen manifold", "operating room equipment")
+                       - "capability"  : Operational context — hours, departments, contact info,
+                                         accreditations, social media, 24/7 availability
+                       - "summary"     : One-line facility profile: type, location, affiliation,
+                                         general description
+                     Pass a list like ["procedure", "equipment"] or a single string like "specialty".
+                     If None, searches across all fact types (use only when cross-type context is needed).
+        num_results: Number of results to return from the vector index.
+                     Default: 100 (sufficient for pure-semantic queries).
+                     Use 350 for IS_COLDSPOT (1★) and IS_GEOSPATIAL+IS_SEMANTIC (2★) pipelines
+                     to maximize the pool available for geospatial–semantic intersection.
     """
     from databricks_langchain import VectorSearchRetrieverTool
 
@@ -231,7 +239,13 @@ def vector_search_tool(query: str, fact_types: list[str] | str | None = None) ->
 
     kwargs = {
         "index_name": VS_INDEX,
-        "num_results": 100,
+        "num_results": num_results,
+        "reranker": {
+            "model": "databricks_reranker",
+            "parameters": {
+                "columns_to_rerank": ["fact_text"]
+            }
+        },
         # fact_id is the VS index primary key — MUST be included for retrieval to work.
         # It is intentionally excluded from the JSON output returned to the LLM (see below).
         "columns": ["fact_id", "facility_id", "fact_text", "fact_type"],
@@ -788,9 +802,6 @@ IS_COLDSPOT = True if ALL of these conditions hold:
 | 7        | IS_QUANTITATIVE only            | genie_chat_tool                                                           |
 
 **CRITICAL rules:**
-- IS_COLDSPOT is highest priority when both IS_GEOSPATIAL is True AND absence keywords are present.
-- IS_GEOSPATIAL + IS_SEMANTIC (Priority 2★): geospatial + a service the user wants facilities to HAVE.
-- IS_COLDSPOT (Priority 1★): geospatial + asking where a service is ABSENT.
 - Plain IS_ANALYTIC without semantic service terms → Priority 5 (medical_agent only).
 - `genie_chat_tool` is ONLY called when IS_QUANTITATIVE is True and IS_ANALYTIC and IS_SEMANTIC are both False.
 - Do NOT chain genie + vector_search, genie + medical_agent, or all three tools together — these combinations are never correct.
@@ -838,33 +849,26 @@ The tool returns up to 100 facilities sorted by ascending distance.
 **IS_COLDSPOT Pipeline (Priority 1★ — e.g., "cold spots where critical procedure is absent within X km"):**
 When IS_COLDSPOT = True:
 
-  **Case A — Location IS specified** (e.g., "cold spots within 50km of Accra"):
-  1. Call `geospatial_query_tool` with `reference_location="Accra"` and `radius_km=50`.
-  2. Call `vector_search_tool` with the critical-procedures query (see below) and `fact_types=["procedure", "equipment"]`.
-  3. Postprocessor produces `GEO_COLDSPOT_ANALYSIS` — use BOTH fields for your answer:
+  **Step 1 — Call `geospatial_query_tool`:**
+  • If a location IS specified: `geospatial_query_tool(reference_location="Accra", radius_km=50)`
+  • If NO location is specified: `geospatial_query_tool(scan_all_ghana_regions=True, radius_km=<user_value_or_50>)`
+    Do NOT ask the user for a location — scan all 16 Ghana regions automatically.
+
+  **Step 2 — Call `vector_search_tool` with these exact parameters:**
+       query       = "caesarean section blood transfusion open heart surgeries kidney transplant surgeries
+                      renal dialysis treatment cataract surgery cornea transplant vitrectomy
+                      obstetric fistula repair laparotomy for ectopic gestations
+                      endoscopic retrograde cholangiopancreatography glaucoma surgeries
+                      general surgery safe abortion and post-abortion care anaesthesia services"
+       fact_types  = ["procedure", "equipment"]
+       num_results = 350
+
+  **Step 3 — Read the postprocessor output:**
+  Postprocessor produces `GEO_COLDSPOT_ANALYSIS` — use BOTH fields for your answer:
        - `matched_facilities[]`   → the facilities that ARE covered (have at least one critical procedure)
        - `cold_spot_by_region{}` → region-level counts of covered vs uncovered facilities
-
-  **Case B — No location specified** (e.g., "where are the largest cold spots within 50km"):
-  DO NOT ask the user for a location. Instead:
-  1. Call `geospatial_query_tool` with `scan_all_ghana_regions=True` and `radius_km=<user_value_or_50>`.
-     This internally geocodes all 16 Ghana regions and returns the deduplicated union of all
-     facilities found within radius_km of each regional capital.
-  2. Call `vector_search_tool` with the critical-procedures query and `fact_types=["procedure", "equipment"]`.
-  3. Postprocessor produces `GEO_COLDSPOT_ANALYSIS` — use BOTH fields for your answer:
-       - `matched_facilities[]`   → the facilities that ARE covered (have at least one critical procedure)
-       - `cold_spot_by_region{}` → region-level counts of covered vs uncovered facilities
-
-  **Critical-procedures VS query for all IS_COLDSPOT calls:**
-       query      = "caesarean section blood transfusion open heart surgeries kidney transplant surgeries
-                     renal dialysis treatment cataract surgery cornea transplant vitrectomy
-                     obstetric fistula repair laparotomy for ectopic gestations
-                     endoscopic retrograde cholangiopancreatography glaucoma surgeries
-                     general surgery safe abortion and post-abortion care anaesthesia services"
-       fact_types = ["procedure", "equipment"]
 
   **Default radius_km**: 50km if the user did not specify a distance.
-  The `vector_search_tool` result will contain only a short system note — ignore it entirely.
   CRITICAL: NEVER call `medical_agent_tool` for cold-spot queries.
 
   **HOW TO FORMAT YOUR COLD-SPOT RESPONSE (mandatory structure):**
@@ -908,20 +912,20 @@ When IS_COLDSPOT = True:
 **IS_GEOSPATIAL + IS_SEMANTIC Pipeline (CRITICAL — e.g., "hospitals within 200km providing X-ray"):**
 When the query is BOTH geospatial AND semantic:
   1. Call `geospatial_query_tool` to get ALL facilities within the specified radius (no condition parameter needed).
-  2. Call `vector_search_tool` with the semantic query and a SINGLE appropriate fact_type:
+  2. Call `vector_search_tool` with the semantic query, a SINGLE appropriate fact_type, and `num_results=350`:
        - Use `fact_types=["procedure"]` for queries about what a facility DOES (surgeries, treatments, procedures)
        - Use `fact_types=["equipment"]` for queries about physical devices/machines (X-ray machine, MRI, CT scanner)
        - Use `fact_types=["specialty"]` for queries about medical specialties
        - NEVER pass multiple fact_types for IS_GEOSPATIAL+IS_SEMANTIC — always pick the single best match.
-       Example: "hospitals providing X-ray imaging" → query="provides X-ray imaging", fact_types=["procedure"]
-       Example: "facilities with MRI scanner" → query="has MRI scanner", fact_types=["equipment"]
+       - ALWAYS pass `num_results=350` — this maximizes the pool available for geospatial–semantic intersection.
+       Example: "hospitals providing X-ray imaging" → query="provides X-ray imaging", fact_types=["procedure"], num_results=350
+       Example: "facilities with MRI scanner" → query="has MRI scanner", fact_types=["equipment"], num_results=350
   3. The Python postprocessor AUTOMATICALLY performs the facility_id set intersection between the two tool
      results. You do NOT need to match, filter, or compare IDs manually.
   4. You will receive the `geospatial_query_tool` result replaced with a JSON tagged
      `"pipeline": "GEO_SEMANTIC_INTERSECTION"` — the facilities pre-matched from both tool outputs,
      enriched with geo data (distance_km, city, state) and the matched semantic facts per facility.
   5. Read `matched_facilities[]` directly and present those results. Do NOT re-intersect or filter manually.
-  6. The `vector_search_tool` result will contain only a short system note — ignore it entirely.
 
 **Scope Filters for Geospatial Tool:**
 If the user specifies any of the following in their query, extract and pass them to `geospatial_query_tool`:
@@ -929,8 +933,6 @@ If the user specifies any of the following in their query, extract and pass them
   • organization_type: 'facility' or 'ngo' (e.g., "only NGO facilities")
   • facility_type:     'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
   • affiliation_type:  'faith-tradition' | 'government' | 'community' | 'philanthropy-legacy' | 'academic'
-  • region:            State/region name (e.g., "Greater Accra" — in addition to or instead of reference_location)
-  • city:              City name
 
 **IS_GEOSPATIAL + IS_ANALYTIC Pipeline (CRITICAL — "anomalies within 50km of Accra"):**
 When the query is BOTH geospatial AND analytic:
@@ -963,6 +965,18 @@ When calling `medical_agent_tool`, you MUST include one of the Exact Match Keywo
 
 *Example:* If the user asks "Find hospitals making suspicious surgical claims", DO NOT just use `"suspicious surgical claims"`. You must inject a Branch 4 keyword: `"verify claim for suspicious surgical claims"`.
 
+**Scope Filters for Medical Agent Tool:**
+All filters are optional — pass ONLY what the user explicitly mentioned:
+  • operator_type:     'private' | 'public'
+  • organization_type: 'facility' | 'ngo'
+  • facility_type:     'hospital' | 'clinic' | 'dentist' | 'farmacy' | 'doctor'
+  • affiliation_type:  'faith-tradition' | 'government' | 'community' | 'philanthropy-legacy' | 'academic'
+  • region:            Exact region/state name (e.g., 'Northern', 'Greater Accra'). Required for deep_validation.
+  • city:              City name (narrows scope within the region).
+  • facility_id:       Single facility UUID — restricts analysis to one facility.
+  • facility_name:     Partial name match (e.g., 'Korle-Bu').
+  • facility_ids:      List of facility UUIDs — restricts analysis to a specific set of facilities (e.g., from a prior geospatial or vector search call).
+
 ### Step 2.5 — Anomaly Classification Protocol (applies after calling medical_agent_tool):
 
 When `medical_agent_tool` returns raw structural data, you MUST classify it based on its `type`:
@@ -985,18 +999,7 @@ When `medical_agent_tool` returns raw structural data, you MUST classify it base
       2. Read `validation_summary`. Group facilities by severity: **high** → **medium** → **low**.
       3. Apply the **Handling Large Results** rules from Step 4 to pick table vs. high-level summary.
       4. If `validation_summary` says "No anomalies detected", state this clearly.
-  • For `GEO_COLDSPOT_ANALYSIS` (Cold-Spot / Procedure Absence):
-      The postprocessor has pre-classified all facilities within the radius.
-      1. Start with a one-line coverage summary:
-         "Within [radius_km] km of [location]: [geo_total] facilities found.
-          [cold_spot_count] ([100-coverage_pct]%) have NO access to any critical procedure."
-      2. Show `cold_spot_facilities[]` in a Markdown table sorted by distance (nearest first):
-         | Facility Name | Type | City | Region | Distance (km) |
-         Cap at 100 rows. These are the geographic gaps.
-      3. After the table, group cold spots by `state` field and count per region.
-         Name the most severely underserved regions (most cold spots or furthest from coverage).
-      4. Optionally show top-10 `covered_facilities` for contrast in a separate section.
-      5. NEVER include `facility_id` UUIDs in your response.
+
 
 ### Step 3 — Multi-tool orchestration:
 
