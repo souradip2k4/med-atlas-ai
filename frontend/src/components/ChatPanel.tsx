@@ -407,10 +407,14 @@ export function ChatPanel() {
                         </div>
                       )}
 
-                      {(entry.citations && entry.citations.summary.total_sources > 0) ||
+                      {(entry.citations &&
+                        (entry.citations.summary.total_sources > 0 ||
+                          entry.citations.steps.length > 0)) ||
                       entry.extractedMapMarkersStatus !== 'idle' ? (
                         <div className="ml-1 mt-1 flex flex-wrap items-center gap-2">
-                          {entry.citations && entry.citations.summary.total_sources > 0 ? (
+                          {entry.citations &&
+                          (entry.citations.summary.total_sources > 0 ||
+                            entry.citations.steps.length > 0) ? (
                             <div className="tooltip-chip-group">
                               <button
                                 type="button"
@@ -418,7 +422,7 @@ export function ChatPanel() {
                                 className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
                               >
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M3 19h6"/><path d="M10 12h.01"/></svg>
-                                Citation Sources {entry.citations.summary.total_sources}
+                                Citation Sources {Math.max(entry.citations.summary.total_sources, entry.citations.steps.length)}
                               </button>
                               <span className="chip-tooltip chip-tooltip--start" role="tooltip">
                                 Contains citations of all the tools and actual resources that were referred for generating this answer.
@@ -477,7 +481,7 @@ export function ChatPanel() {
             )}
           </div>
 
-          <div className="shrink-0 border-t border-border-app/80 bg-[var(--color-chat-footer)] p-5 backdrop-blur-[12px]">
+          <div className="shrink-0 border-t border-border-app/80 bg-[var(--color-chat-footer)] p-2 backdrop-blur-[12px]">
             <div className="relative flex items-end rounded-[20px] border border-[var(--color-chat-composer-border)] bg-[var(--color-chat-composer-shell)] shadow-[var(--color-chat-composer-shadow)]">
               <input
                 ref={inputRef}
@@ -502,6 +506,9 @@ export function ChatPanel() {
                 )}
               </button>
             </div>
+            <p className="pt-2 text-center text-[0.72rem] font-medium text-ink-500/90">
+              Responses may vary. If this result is not useful, run the same prompt again.
+            </p>
           </div>
         </>
       )}
