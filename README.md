@@ -1,6 +1,83 @@
-# Med-Atlas-AI: Intelligent Document Processing (IDP) Pipeline
+# Med-Atlas-AI
 
-A production-grade Databricks-powered IDP pipeline that ingests raw healthcare facility data from Ghana, extracts structured information through an LLM chain, generates semantically rich fact texts optimised for **Vector Search (RAG)**, and produces multi-dimensional **regional analytics** designed for **Text-to-SQL** querying. The pipeline writes to three core Delta tables on Unity Catalog, enabling a downstream LangGraph AI agent to answer complex healthcare infrastructure questions.
+An end-to-end healthcare infrastructure intelligence platform for Ghana. The system comprises two tightly integrated subsystems: an **IDP Pipeline** that transforms raw facility data into structured Delta tables with vector-searchable facts, and an **AI Agent** that answers complex medical, statistical, and geospatial queries using a hybrid SQL + LLM reasoning engine.
+
+---
+
+## Quick Start
+
+### Environment Variables
+
+Create a `.env` file in the `IDP/` directory:
+
+```env
+DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+DATABRICKS_TOKEN=dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+DATABRICKS_SERVERLESS=true                  # OR set DATABRICKS_CLUSTER_ID
+CATALOG=med_atlas_ai_v2
+SCHEMA=default
+CSV_PATH=Virtue Foundation Ghana v0.3 - Sheet1.csv
+LLM_ENDPOINT=databricks-gpt-oss-120b
+MAX_WORKERS=6                               # Parallel extraction threads
+MAX_PROCESS_ROWS=797                        # Max unique rows per run (max = 797)
+GEMINI_API_KEY=AIzaXXXXXXXXXXXXXXXXXXXXX   # Gemini location
+LOCATION_IQ_ACCESS_TOKEN=pk.XXXXXXXX       # LocationIQ geocoding
+```
+
+---
+
+### 1. Run the IDP Pipeline (Stages 1–6)
+
+```bash
+# 1. Create virtual environment
+uv venv
+source .venv/bin/activate
+
+# 2. Install dependencies
+uv pip install -r requirements.txt
+
+# 3. Configure .env (see above)
+
+# 4. Run Stage 1–4: Extract & persist facility_records
+uv run facility_record_generator.py
+
+# 5. Run Stage 5: Generate facility_facts for Vector Search
+uv run populate_facts.py
+
+# 6. Run Stage 6: Compute regional_insights for Text-to-SQL
+uv run compute_regional_insights.py
+```
+
+Each script is **idempotent via full overwrite** — re-running regenerates its target Delta table from scratch. There is no checkpointing. To process more rows, increase `MAX_PROCESS_ROWS` in `.env` and re-run `facility_record_generator.py`.
+
+---
+
+### 2. Start the AI Agent Server
+
+The AI agent server is a **FastAPI** application powered by a **LangGraph** state machine. It exposes the conversational `/invoke` endpoint and the map UI backend `/map/*` endpoints. Before starting, ensure the following variables are set in `ai_agent/.env` (or the root `.env`):
+
+```env
+VECTOR_SEARCH_INDEX="med_atlas_ai.default.med_atlas_vs_endpoint"             # Databricks VS index for facility_facts
+ANALYZE_UC_FUNCTION_NAME="med_atlas_ai.default.analyze_medical_query"        # UC function for anomaly / gap analysis
+GEOSPATIAL_UC_FUNCTION_NAME="med_atlas_ai.default.find_facilities_nearby"    # UC function for radius search
+GENIE_SPACE_ID="<your-genie-space-id>"                                       # Databricks Genie Space for Text-to-SQL
+GENIE_SPACE_NAME="Healthcare Facilities Insights"                            # Display name of the Genie Space
+LOCATION_IQ_ACCESS_TOKEN="pk.XXXXXXXX"                                       # LocationIQ API key for geocoding
+DATABRICKS_WAREHOUSE_ID="<your-warehouse-id>"                                # SQL warehouse used by Genie
+```
+
+```bash
+# Start the server (aliased via ai_agent.server for backwards compatibility)
+uv run uvicorn ai_agent.server:app --reload --port 8000
+```
+
+---
+
+## Part I — Intelligent Document Processing (IDP) Pipeline
+
+The IDP (Intelligent Document Processing) Pipeline is the **data backbone** of Med-Atlas-AI. It takes a raw CSV of healthcare facilities, cleans and deduplicates the records, uses an AI model to fill in missing structured details, resolves locations and coordinates, and ultimately stores everything in three organised database tables — ready for the AI Agent to query.
+
+Think of it as the pipeline that turns messy, incomplete raw data into a clean, structured, and searchable knowledge base about Ghana's healthcare infrastructure.
 
 ---
 
@@ -134,8 +211,30 @@ IDP/
 ├── facility_record_generator.py            # Pipeline orchestrator (Stages 1–4)
 ├── populate_facts.py                       # Standalone — runs Stage 5 on all records
 ├── compute_regional_insights.py            # Standalone — runs Stage 6
-├── .env                                    # Credentials & config (gitignored)
-└── README.md                               # This file
+└── .env                                    # Credentials & config (gitignored)
+```
+
+---
+
+### Project Structure — `ai_agent/`
+
+```
+ai_agent/
+├── api/                                    # Modular FastAPI layer
+│   ├── main.py                             # Assembles routers and middleware
+│   ├── routes/
+│   │   ├── agent.py                        # /invoke, /tools, /health endpoints
+│   │   ├── map.py                          # /map/search, /map/metadata, /map/facility endpoints
+│   │   └── location.json                   # Static metadata (regions, cities, specialties)
+│   └── schemas/
+│       ├── agent.py                        # Pydantic models for /invoke request/response
+│       └── map.py                          # Pydantic models for /map request/response
+│
+├── agent.py                                # LangGraph StateGraph, all 4 tools, SYSTEM_PROMPT
+├── server.py                               # FastAPI app entry point (imports api/main.py)
+├── setup_geospatial.sql                    # Unity Catalog SQL function: find_facilities_nearby
+├── setup_uc_function.sql                   # Unity Catalog SQL function: analyze_medical_query
+└── .env                                    # Credentials & config (gitignored)
 ```
 
 ---
@@ -318,13 +417,13 @@ Builds a pre-aggregated OLAP analytics table using **PySpark** `groupBy` aggrega
 
 #### Six Aggregation Dimensions
 
-| #   | `insight_category` | `insight_value`      | `facility_count` | `total_capacity` | `total_doctors` |
-| --- | ------------------ | -------------------- | ---------------- | ---------------- | --------------- |
-| 1   | `overview`         | `all_facilities`     | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
-| 2   | `operator`         | `public` / `private` | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
-| 3   | `facility_type`    | `clinic`, `hospital`, `farmacy`, `doctor`, `dentist` | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
-| 4   | `organization`     | `facility` / `ngo`   | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
-| 5   | `specialty`        | e.g. `"cardiology"`  | ✅ countDistinct | `null`\*         | `null`\*        |
+| #   | `insight_category` | `insight_value`                                                                 | `facility_count` | `total_capacity` | `total_doctors` |
+| --- | ------------------ | ------------------------------------------------------------------------------- | ---------------- | ---------------- | --------------- |
+| 1   | `overview`         | `all_facilities`                                                                | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
+| 2   | `operator`         | `public` / `private`                                                            | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
+| 3   | `facility_type`    | `clinic`, `hospital`, `farmacy`, `doctor`, `dentist`                            | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
+| 4   | `organization`     | `facility` / `ngo`                                                              | ✅ countDistinct | ✅ SUM           | ✅ SUM          |
+| 5   | `specialty`        | e.g. `"cardiology"`                                                             | ✅ countDistinct | `null`\*         | `null`\*        |
 | 6   | `affiliation`      | `faith-tradition`, `government`, `community`, `philanthropy-legacy`, `academic` | ✅ countDistinct | `null`\*         | `null`\*        |
 
 > \*`total_capacity` and `total_doctors` are explicitly `NULL` for array-based dimensions (`specialty`, `affiliation`) to prevent statistical overcounting — a hospital's bed count must not be multiplied by its number of specialties or affiliations.
@@ -333,16 +432,16 @@ Builds a pre-aggregated OLAP analytics table using **PySpark** `groupBy` aggrega
 
 #### `regional_insights` Delta Table Schema
 
-| Column             | Type    | Description                                                    |
-| ------------------ | ------- | -------------------------------------------------------------- |
-| `country`          | String  | Always `"Ghana"`                                               |
-| `state`            | String  | Ghana region (grouping dimension)                              |
-| `city`             | String  | City (null = state-level aggregate)                            |
-| `insight_category` | String  | `"overview"`, `"operator"`, or `"specialty"`                   |
-| `insight_value`    | String  | `"all_facilities"` / `"public"` / `"private"` / specialty name |
-| `facility_count`   | Integer | Distinct facilities in this slice                              |
-| `total_capacity`   | Integer | SUM of bed capacity (null for specialty rows)                  |
-| `total_doctors`    | Integer | SUM of doctor counts (null for specialty rows)                 |
+| Column             | Type    | Description                                                                                                         |
+| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `country`          | String  | Always `"Ghana"`                                                                                                    |
+| `state`            | String  | Ghana region (grouping dimension)                                                                                   |
+| `city`             | String  | City (null = state-level aggregate)                                                                                 |
+| `insight_category` | String  | `"overview"`, `"operator"`, `"facility_type"`, `"organization"`, `"specialty"`, or `"affiliation"`                  |
+| `insight_value`    | String  | Depends on category — e.g. `"all_facilities"`, `"public"`, `"clinic"`, `"ngo"`, specialty name, or affiliation name |
+| `facility_count`   | Integer | Distinct facilities in this slice                                                                                   |
+| `total_capacity`   | Integer | SUM of bed capacity (null for array-based dimensions: specialty, affiliation)                                       |
+| `total_doctors`    | Integer | SUM of doctor counts (null for array-based dimensions: specialty, affiliation)                                      |
 
 #### Example Genie Text-to-SQL Queries
 
@@ -365,7 +464,7 @@ ORDER BY facility_count DESC;
 SELECT f.facility_count as total_clinics, a.facility_count as gov_affiliated
 FROM regional_insights f
 JOIN regional_insights a ON f.state = a.state AND f.city = a.city
-WHERE f.state = 'Greater Accra' 
+WHERE f.state = 'Greater Accra'
   AND f.insight_category = 'facility_type' AND f.insight_value = 'clinic'
   AND a.insight_category = 'affiliation' AND a.insight_value = 'government';
 ```
@@ -381,52 +480,6 @@ WHERE f.state = 'Greater Accra'
 | **Quantitative / Statistical** | Text-to-SQL (Genie)  | `regional_insights`                        | _"How many public hospitals are in Ashanti?"_               |
 | **Row-level Lookup**           | Direct SQL (Genie)   | `facility_records`                         | _"List names and phone numbers of public clinics in Accra"_ |
 | **Anomaly Detection**          | Agent-side LLM + SQL | Both tables                                | _"Which clinics claim surgeries but have no beds?"_         |
-
----
-
-## Environment Variables
-
-Create a `.env` file in the `IDP/` directory:
-
-```env
-DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-DATABRICKS_TOKEN=dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-DATABRICKS_SERVERLESS=true                  # OR set DATABRICKS_CLUSTER_ID
-CATALOG=med_atlas_ai_v2
-SCHEMA=default
-CSV_PATH=Virtue Foundation Ghana v0.3 - Sheet1.csv
-LLM_ENDPOINT=databricks-gpt-oss-120b
-MAX_WORKERS=6                               # Parallel extraction threads
-MAX_PROCESS_ROWS=797                        # Max unique rows per run (max = 797)
-GEMINI_API_KEY=AIzaXXXXXXXXXXXXXXXXXXXXX   # Gemini location
-LOCATION_IQ_ACCESS_TOKEN=pk.XXXXXXXX       # LocationIQ geocoding
-```
-
----
-
-## Setup & Usage
-
-```bash
-# 1. Create virtual environment
-uv venv
-source .venv/bin/activate
-
-# 2. Install dependencies
-uv pip install -r requirements.txt
-
-# 3. Configure .env (see above)
-
-# 4. Run Stage 1–4: Extract & persist facility_records
-uv run facility_record_generator.py
-
-# 5. Run Stage 5: Generate facility_facts for Vector Search
-uv run populate_facts.py
-
-# 6. Run Stage 6: Compute regional_insights for Text-to-SQL
-uv run compute_regional_insights.py
-```
-
-Each script is **idempotent via full overwrite** — re-running regenerates its target Delta table from scratch. There is no checkpointing. To process more rows, increase `MAX_PROCESS_ROWS` in `.env` and re-run `facility_record_generator.py`.
 
 ---
 
@@ -447,3 +500,233 @@ Each script is **idempotent via full overwrite** — re-running regenerates its 
 | **Overcounting prevention in `regional_insights`**       | `total_capacity` and `total_doctors` are `NULL` for the `specialty` dimension — a hospital's bed count must not be multiplied by its number of specialties.                                                            |
 | **`facility_id = CSV pk_unique_id`**                     | Eliminates a separate `source_row_id` column. The deduplicator guarantees exactly one merged row per `pk_unique_id`, making this ID stable and collision-free across all tables.                                       |
 | **Three independent runner scripts**                     | `facility_record_generator.py`, `populate_facts.py`, and `compute_regional_insights.py` are fully decoupled. Any single stage can be re-run in isolation without re-triggering expensive LLM extraction.               |
+
+## Part II — AI Agent Pipeline
+
+The AI Agent is a conversational intelligence layer built on top of the three Delta tables populated by the IDP Pipeline. It accepts natural language questions about Ghana's healthcare infrastructure — ranging from "Which clinics in Kumasi perform cardiac surgery?" to "Where are the largest geographic cold spots for emergency care within 50 km?" — and returns medically grounded, evidence-backed answers. Rather than sending every question blindly to an LLM, the agent first **classifies the intent** of each query and then **routes it** to the most appropriate computational tool: a geospatial SQL engine, a semantic vector search index, a pure-SQL anomaly detector, or a natural language–to-SQL interface.
+
+The core design philosophy is a **Hybrid Reasoning Engine**: **"SQL for strict math, LLM for medical reasoning."** Counting, aggregating, and detecting statistical outliers are handled by optimised Unity Catalog SQL functions — operations the LLM would otherwise perform unreliably. The LLM is reserved exclusively for what it excels at: interpreting structured results, synthesising clinical context, and producing coherent, human-readable responses grounded in the SQL output.
+
+### Technology Stack
+
+| Layer                             | Technology                                                                               |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Agent Framework**               | **LangGraph** `StateGraph` — explicit node/edge routing, tool postprocessor node         |
+| **LLM — Agent Reasoning**         | Databricks Model Serving · configurable via `LLM_ENDPOINT`                               |
+| **Tool — Geospatial**             | Unity Catalog SQL function (`find_facilities_nearby`) · `ST_DistanceSpheroid` (WGS84)    |
+| **Tool — Semantic Search**        | **Databricks Vector Search** · HYBRID mode + `databricks_reranker` on `fact_text`        |
+| **Tool — Anomaly / Gap Analysis** | Unity Catalog SQL function (`analyze_medical_query`) · 3-branch RLIKE dispatch           |
+| **Tool — Quantitative SQL**       | **Databricks Genie** (`genie_chat_tool`) · natural language → SQL on `regional_insights` |
+| **Geocoding**                     | **LocationIQ API** · resolves plain location names to lat/lon before SQL execution       |
+| **API Server**                    | **FastAPI** · modular routers (`api/routes/agent.py`, `api/routes/map.py`)               |
+| **Tracing / Observability**       | **MLflow Tracing** · named spans per pipeline type (geo_coldspot, geo_semantic)          |
+| **Structured Output**             | **Pydantic v2** · request/response schemas in `api/schemas/`                             |
+
+---
+
+### 1. Agent Architecture & Query Routing
+
+Queries are intercepted by our LangChain agent (`agent.py`) and routed dynamically based on natural language intent:
+
+1. **Cold-Spot Queries (`IS_COLDSPOT`)** — _highest priority_:
+   - Example: "Where are the largest geographic cold spots where a critical procedure is absent within 50km?"
+   - Router: **`geospatial_query_tool` → `vector_search_tool`** (Cold-Spot Pipeline)
+   - Logic: Identifies geographic areas where life-saving procedures are _absent_. The postprocessor computes the set difference (geo facilities − vector search matches) to find uncovered facilities, then groups them into a regional gap report.
+2. **Quantitative / Ad-hoc Queries (`IS_QUANTITATIVE`)**:
+   - Example: "How many hospitals are in Accra?"
+   - Router: **Databricks Genie (`genie_chat_tool`)**
+   - Logic: Translates natural language to SQL on the fly to count/aggregate clean schema data.
+3. **Structural / Analytic Queries (`IS_ANALYTIC`)**:
+   - Example: "Which facilities have suspicious overclaims for surgery?"
+   - Router: **Medical Agent Engine (`medical_agent_tool`)** or **Geospatial Engine**
+   - Logic: Executes highly optimized, pre-computed pure-SQL branches for anomaly detection and geospatial clustering within Unity Catalog.
+4. **Semantic / Knowledge Queries (`IS_SEMANTIC`)**:
+   - Example: "Which facilities provide cardiac surgery?"
+   - Router: **Vector Search (`vector_search_tool`)**
+   - Logic: Performs semantic similarity search over pre-generated facility facts stored in the `facility_facts` table.
+5. **Geospatial Queries (`IS_GEOSPATIAL`)**:
+   - Example: "Find clinics within 30 km of Kumasi."
+   - Router: **Geospatial Engine (`geospatial_query_tool`)**
+   - Logic: Geocodes the location name via LocationIQ, then executes ST_DistanceSpheroid calculations on the WGS84 spheroid via a Unity Catalog SQL function.
+6. **Out-of-Scope**:
+   - Logic: Blocked natively via system prompt refusal.
+
+#### Priority Routing Table
+
+| Priority | Classification              | Tools Used                                     |
+| -------- | --------------------------- | ---------------------------------------------- |
+| 1 ★      | IS_COLDSPOT                 | `geospatial_query_tool` → `vector_search_tool` |
+| 2 ★      | IS_GEOSPATIAL + IS_SEMANTIC | `geospatial_query_tool` → `vector_search_tool` |
+| 3 ★      | IS_GEOSPATIAL + IS_ANALYTIC | `geospatial_query_tool` → `medical_agent_tool` |
+| 4        | IS_GEOSPATIAL only          | `geospatial_query_tool`                        |
+| 5        | IS_ANALYTIC (any combo)     | `medical_agent_tool`                           |
+| 6        | IS_SEMANTIC only            | `vector_search_tool`                           |
+| 7        | IS_QUANTITATIVE only        | `genie_chat_tool`                              |
+
+#### Shared Scope Filters
+
+Both `setup_uc_function.sql` and `setup_geospatial.sql` accept the following optional attribute filters. All are `STRING`, all are optional, and `NULL` means no filter applied.
+
+| Filter              | Accepted Values                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| `facility_type`     | `'hospital'` \| `'clinic'` \| `'dentist'` \| `'farmacy'` \| `'doctor'`                            |
+| `operator_type`     | `'private'` \| `'public'`                                                                         |
+| `organization_type` | `'facility'` \| `'ngo'`                                                                           |
+| `affiliation_type`  | `'faith-tradition'` \| `'government'` \| `'community'` \| `'philanthropy-legacy'` \| `'academic'` |
+
+---
+
+### 2. The Medical Agent Engine (`setup_uc_function.sql`)
+
+This pure-SQL Unity Catalog function (`med_atlas_ai.default.analyze_medical_query`) handles complex anomaly detection and gap analysis. It contains **3 distinct logic branches**. All branches operate exclusively on `facility_records` — no joins against the high-volume `facility_facts` table. Branch dispatch is driven by `RLIKE` keyword matching on the `query` string passed from the agent.
+
+| Branch                             | Check                | Trigger Keywords                                                                                                                                     | Mechanism                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Unmet Needs (Regional Gaps)** | Service Availability | `unmet`, `gap`, `need`, `service gap`                                                                                                                | Uses `ARRAY_EXCEPT` to find globally known medical specialties definitively missing from a specific region. Returns `specialties_missing` as a pre-computed SQL list — these are confirmed gaps. Free-text procedures and equipment are returned as-is for LLM medical reasoning.                     |
+| **2. Anomaly Flagging**            | Statistical Outliers | `outlier`, `anomal`, `flag`, `unusual`, `inconsisten`, `signal`                                                                                      | Applies 3-sigma checks on capacity and doctor counts against a global baseline. Returns `plain_reason` fields describing each outlier in natural language. Caps at 100 results ordered by deviation magnitude.                                                                                        |
+| **3. Deep Validation**             | Consistency          | `deep valid`, `validate`, `consistency`, `verify claim`, `mismatch`, `feature mismatch`, `procedure count`, `equipment count`, `infrastr`, `capable` | Region-scoped. SQL exports full facility profiles (specialties, procedures, equipment as comma-separated strings) with a `completeness` tag. Requires `region`, `facility_id`, or `facility_name`. Python agent batches **20 facilities at a time** through the LLM for medical consistency analysis. |
+
+#### Geospatial Payload Enrichment
+
+All SQL branches explicitly return `facility_id`, `latitude`, and `longitude` so the frontend map can pan to and highlight any facility mentioned in the LLM response.
+
+#### `medical_agent_tool` — Filters
+
+In addition to the [Shared Scope Filters](#shared-scope-filters) above, this function accepts:
+
+| Filter          | Description                                                              |
+| --------------- | ------------------------------------------------------------------------ |
+| `region`        | Restrict to a specific state/region (e.g., `'Greater Accra'`)            |
+| `city`          | Restrict to a specific city                                              |
+| `facility_id`   | Look up a single facility by UUID                                        |
+| `facility_name` | Look up a single facility by name (case-insensitive)                     |
+| `facility_ids`  | Comma-separated list of UUIDs — used by the deep-validation batch runner |
+
+#### The Missing Data Philosophy (NULL vs Zero)
+
+- **`missing_data`**: the field is `NULL` — data was never collected.
+- **`true_zero`**: the field exists but has no entries — confirmed absence of capability.
+
+Branches return a `data_coverage_summary` payload so the LLM states data-gap caveats honestly before listing findings.
+
+---
+
+### 3. The Geospatial Engine (`setup_geospatial.sql`)
+
+Handles distance calculations and spatial clustering using `ST_DistanceSpheroid` (WGS84 spheroid) for geodesic accuracy. **The Python agent always geocodes the reference location name (e.g., "Accra") via the LocationIQ API** before invoking the UC function — raw lat/lon coordinates are never passed directly by the LLM.
+
+> **Why ST_DistanceSpheroid over Haversine?**
+> Standard formulas like Haversine calculate distance across a perfect sphere, which introduces an error rate of up to 0.5% (distorting distances by several kilometers over long routes). By utilizing Databricks's native `ST_DistanceSpheroid` traversing the WGS84 Reference Spheroid model, the engine accounts for the Earth's equatorial bulge to provide **sub-meter accuracy**, making it the gold standard for straight-line geospatial mapping.
+
+#### `geospatial_query_tool` — Parameters
+
+| Parameter                | Type   | Required | Description                                                                                                                                                                       |
+| ------------------------ | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reference_location`     | string | **Yes**  | Plain location name (e.g., `"Accra"`, `"Volta region"`). Geocoded automatically via LocationIQ — raw lat/lon must never be passed.                                                |
+| `radius_km`              | float  | No       | Search radius in kilometres. Default: **50**.                                                                                                                                     |
+| `scan_all_ghana_regions` | bool   | No       | Set `True` for global cold-spot analysis. Geocodes all 16 Ghana regional capitals and returns the deduplicated union of all facilities found.                                     |
+| _(shared filters)_       | string | No       | `facility_type`, `operator_type`, `organization_type`, `affiliation_type` — see [Shared Scope Filters](#shared-scope-filters). Only pass when the user explicitly mentioned them. |
+
+#### Geocoding Flow
+
+The LLM never resolves coordinates itself. The full flow is:
+
+```
+LLM passes reference_location="Kumasi"
+        │
+        ▼
+geospatial_query_tool (Python)
+  → GET https://us1.locationiq.com/v1/search
+        ?key=<LOCATION_IQ_ACCESS_TOKEN>
+        &q=Kumasi, Ghana
+        &format=json
+  ← [{ "lat": "6.6885116", "lon": "-1.6243874", ... }]
+        │
+        ▼
+Builds payload: { "ref_lat": 6.688, "ref_lon": -1.624, "radius_km": 50, ... }
+        │
+        ▼
+UCFunctionToolkit.invoke(query_json=<payload>)
+  → Databricks SQL: find_facilities_nearby(query_json)
+        → ST_DistanceSpheroid(facility_point, ST_Point(ref_lon, ref_lat))
+        → WHERE distance_m / 1000 <= radius_km
+        → ORDER BY distance_m ASC LIMIT 100
+  ← JSON of up to 100 facilities with distance_km per facility
+```
+
+For `scan_all_ghana_regions=True`, this geocoding call is repeated for each of the 16 Ghana regional capitals with a 500 ms delay between requests to stay within the LocationIQ rate limit (2 req/sec). Results are deduplicated by `facility_id` before being returned.
+
+---
+
+### 4. Modular API Architecture (`ai_agent/api/`)
+
+The server has been refactored into a scalable, modular structure to support both the LLM Agent and the Frontend Map UI.
+
+#### Directory Structure
+
+- `api/main.py`: Entry point that assembles FastAPI routers and middleware.
+- `api/routes/`:
+  - `agent.py`: LLM orchestration endpoints (`/invoke`, `/tools`).
+  - `map.py`: Backend logic for the Map UI (`/map/search`, `/map/metadata`).
+- `api/schemas/`: Pydantic models for request/response validation.
+
+---
+
+### 5. Map UI Backend API (`/map/`)
+
+These endpoints power the interactive map interface for Ghana's healthcare infrastructure.
+
+#### `GET /map/metadata`
+
+- **Purpose**: Populates frontend filters (dropdowns, multi-selects).
+- **Source**: All data is loaded entirely from a static `location.json` file co-located with the route. No SQL warehouse query is executed for this endpoint — the response is instantaneous.
+- **Content**: Returns `regions` (list), `cities_by_region` (map), `specialties` (list), `facility_types`, `operator_types`, `organization_types`, and `affiliation_types`.
+
+#### `POST /map/search`
+
+- **Purpose**: Returns facility markers and summary cards based on user filters.
+- **Payload Example**:
+  ```json
+  {
+    "region": "Greater Accra Region",
+    "city": "Accra",
+    "specialties": ["Cardiology", "Dentistry"],
+    "facility_type": "hospital",
+    "operator_type": "public",
+    "affiliation_types": ["government"]
+  }
+  ```
+- **Features**:
+  - **Viewport Bounding Box Filtering**: If a `bbox` (`[min_lat, min_lon, max_lat, max_lon]`) is provided, the API uses SQL `BETWEEN` operators to rapidly filter facilities strictly to the user's current map camera view.
+  - **Advanced Array Filtering**: Uses `ARRAYS_OVERLAP` in SQL to efficiently filter multi-value fields like specialties.
+  - **Count**: Returns a `count` field for the "Results Found" UI counter.
+
+#### `GET /map/facility/{identifier}`
+
+- **Purpose**: Fetches the complete medical profile for a single facility by ID or by name.
+- **Lookup Logic**: The `identifier` path parameter is matched against both `facility_id` (exact match) and `facility_name` (case-insensitive, with automatic whitespace normalization — multiple spaces are collapsed to a single space before comparison).
+- **Example URLs**:
+  - `GET /map/facility/fac-123-abc`
+  - `GET /map/facility/Korle-Bu%20Teaching%20Hospital`
+
+---
+
+### 6. LLM Agent Endpoints
+
+- **`POST /invoke`**: Primary endpoint for conversational AI interaction.
+- **`GET /health`**: Returns system status and tool availability.
+- **`GET /tools`**: Returns the JSON schema for all agentic tools.
+
+---
+
+### 7. Map-LLM Integration (Two-Way Sync)
+
+The architecture is uniquely designed to support **Two-Way Synchronization** between the Map UI and the Conversational Agent:
+
+1. **Map drives the LLM**: Operations performed on the map (like moving the bounding box or applying filters) can be injected into the LLM context.
+2. **LLM drives the Map (Citation Sync)**:
+   - When the agent uses `medical_agent_tool` or `geospatial_query_tool`, the SQL engine returns `facility_id`, `latitude`, and `longitude`.
+   - The parsers in `agent.py` capture these exact coordinates and embed them into the structured `citations` array.
+   - When the Frontend receives the `/invoke` streaming response, it parses these citations and automatically plots, pans to, or pulses the pins for any facility the LLM decided to talk about in its response.
+
+---
