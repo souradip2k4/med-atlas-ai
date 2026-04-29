@@ -17,7 +17,8 @@ import { ChatMappedFacilitiesView } from './ChatMappedFacilitiesView';
 import type { AgentResponse, ExtractedMapMarker } from '../lib/types';
 
 const SUGGESTED_PROMPTS = [
-  'How many hospitals within 200km of Accra have the ability to performs x-ray imaging. List their names and locations?',
+  'How many hospitals within 200km of Accra have the ability to performs x-ray imaging.',
+  'Show the top 5 regions/state by number of health facilities.',
   'Which facilities have an unusually high breadth of claimed procedures relative to their stated/observed infrastructure signals (e.g.,200 procedures with minimal equipment list) in the Greater Accra region?',
   'Check for equipment-procedure mismatches in Ashanti Region',
 ];
