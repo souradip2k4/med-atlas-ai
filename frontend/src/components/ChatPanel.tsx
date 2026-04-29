@@ -507,7 +507,7 @@ export function ChatPanel() {
               </button>
             </div>
             <p className="pt-2 text-center text-[0.72rem] font-medium text-ink-500/90">
-              Responses may vary. If this result is not useful, run the same prompt again.
+              Responses may vary and take some time to generate. If this result is not useful, run the same prompt again.
             </p>
           </div>
         </>

@@ -2,6 +2,8 @@
 
 An end-to-end healthcare infrastructure intelligence platform for Ghana. The system comprises two tightly integrated subsystems: an **IDP Pipeline** that transforms raw facility data into structured Delta tables with vector-searchable facts, and an **AI Agent** that answers complex medical, statistical, and geospatial queries using a hybrid SQL + LLM reasoning engine.
 
+> **Navigate:** [Part I — IDP Pipeline](#part-i--intelligent-document-processing-idp-pipeline) · [Part II — AI Agent Pipeline](#part-ii--ai-agent-pipeline) · [Part III — Frontend](#part-iii--frontend)
+
 ---
 
 ## Quick Start
@@ -13,14 +15,14 @@ Create a `.env` file in the `IDP/` directory:
 ```env
 DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 DATABRICKS_TOKEN=dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-DATABRICKS_SERVERLESS=true                  # OR set DATABRICKS_CLUSTER_ID
+DATABRICKS_SERVERLESS=true
 CATALOG=med_atlas_ai_v2
 SCHEMA=default
 CSV_PATH=Virtue Foundation Ghana v0.3 - Sheet1.csv
 LLM_ENDPOINT=databricks-gpt-oss-120b
 MAX_WORKERS=6                               # Parallel extraction threads
 MAX_PROCESS_ROWS=797                        # Max unique rows per run (max = 797)
-GEMINI_API_KEY=AIzaXXXXXXXXXXXXXXXXXXXXX   # Gemini location
+GEMINI_API_KEY=AIzaXXXXXXXXXXXXXXXXXXXXX   # Gemini location inference
 LOCATION_IQ_ACCESS_TOKEN=pk.XXXXXXXX       # LocationIQ geocoding
 ```
 
@@ -29,6 +31,8 @@ LOCATION_IQ_ACCESS_TOKEN=pk.XXXXXXXX       # LocationIQ geocoding
 ### 1. Run the IDP Pipeline (Stages 1–6)
 
 ```bash
+cd IDP
+
 # 1. Create virtual environment
 uv venv
 source .venv/bin/activate
@@ -36,15 +40,13 @@ source .venv/bin/activate
 # 2. Install dependencies
 uv pip install -r requirements.txt
 
-# 3. Configure .env (see above)
-
-# 4. Run Stage 1–4: Extract & persist facility_records
+# 3. Run Stage 1–4: Extract & persist facility_records
 uv run facility_record_generator.py
 
-# 5. Run Stage 5: Generate facility_facts for Vector Search
+# 4. Run Stage 5: Generate facility_facts for Vector Search
 uv run populate_facts.py
 
-# 6. Run Stage 6: Compute regional_insights for Text-to-SQL
+# 5. Run Stage 6: Compute regional_insights for Text-to-SQL
 uv run compute_regional_insights.py
 ```
 
@@ -52,28 +54,102 @@ Each script is **idempotent via full overwrite** — re-running regenerates its 
 
 ---
 
-### 2. Start the AI Agent Server
+### 2. Set Up Databricks Infrastructure
 
-The AI agent server is a **FastAPI** application powered by a **LangGraph** state machine. It exposes the conversational `/invoke` endpoint and the map UI backend `/map/*` endpoints. Before starting, ensure the following variables are set in `ai_agent/.env` (or the root `.env`):
+#### 2a — Enable Change Data Feed on the facts table
+
+Run the following in a Databricks notebook or SQL editor:
+
+```sql
+ALTER TABLE med_atlas_ai_v2.default.facility_facts
+SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
+```
+
+This is required for the Vector Search managed sync index to detect row-level changes.
+
+#### 2b — Create a Vector Search Endpoint
+
+In the Databricks sidebar, go to **Compute → Vector Search → Create Endpoint**. Give it a name (e.g., `vector-search-endpoint`) and confirm. Wait for the endpoint to reach the **Online** state before proceeding.
+
+#### 2c — Create the Vector Search Index
+
+1. Navigate to **Catalog → `med_atlas_ai_v2` → `default` → `facility_facts`**
+2. Click **Create → Vector Search Index** and fill in the form:
+
+| Field                   | Value                                 |
+| ----------------------- | ------------------------------------- |
+| Index name              | `med_atlas_vs_endpoint_v2`            |
+| Primary key             | `fact_id`                             |
+| Columns to index        | _(leave blank — indexes all columns)_ |
+| Vector Search endpoint  | _(select the endpoint created in 2b)_ |
+| Index subtype           | **Hybrid Index**                      |
+| Embedding source        | **Compute embeddings**                |
+| Embedding source column | `fact_text`                           |
+| Embedding model         | `databricks-gte-large-en`             |
+| Sync mode               | **Triggered**                         |
+
+3. Click **Create** and wait for the index status to show **Online**.
+
+#### 2d — Create a Genie Space
+
+1. In the Databricks sidebar, navigate to **Genie Spaces** and click **New**
+2. In the **Connect your data** dialog, select both `facility_records` and `regional_insights` from `med_atlas_ai_v2 → default`
+3. Click **Create**
+4. Once created, open the **About** panel of the space and copy the **Space ID** and **Name** — you will need these in the next step
+
+#### 2e — Register the Unity Catalog SQL Functions
+
+Run both SQL files from the Databricks SQL editor or a connected notebook:
+
+- `ai_agent/setup_geospatial.sql` — geospatial radius search function
+- `ai_agent/setup_uc_function.sql` — anomaly and gap detection function
+
+---
+
+### 3. Start the AI Agent Server
+
+Create `ai_agent/.env` with the following variables (use the Space ID and warehouse ID from step 2d):
 
 ```env
-VECTOR_SEARCH_INDEX="med_atlas_ai.default.med_atlas_vs_endpoint"             # Databricks VS index for facility_facts
-ANALYZE_UC_FUNCTION_NAME="med_atlas_ai.default.analyze_medical_query"        # UC function for anomaly / gap analysis
-GEOSPATIAL_UC_FUNCTION_NAME="med_atlas_ai.default.find_facilities_nearby"    # UC function for radius search
-GENIE_SPACE_ID="<your-genie-space-id>"                                       # Databricks Genie Space for Text-to-SQL
-GENIE_SPACE_NAME="Healthcare Facilities Insights"                            # Display name of the Genie Space
-LOCATION_IQ_ACCESS_TOKEN="pk.XXXXXXXX"                                       # LocationIQ API key for geocoding
-DATABRICKS_WAREHOUSE_ID="<your-warehouse-id>"                                # SQL warehouse used by Genie
+DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+DATABRICKS_TOKEN=dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+CATALOG=med_atlas_ai_v2
+SCHEMA=default
+VECTOR_SEARCH_INDEX=med_atlas_ai_v2.default.med_atlas_vs_endpoint_v2  # index created in 2c
+ANALYZE_UC_FUNCTION_NAME=med_atlas_ai_v2.default.analyze_medical_query
+GEOSPATIAL_UC_FUNCTION_NAME=med_atlas_ai_v2.default.find_facilities_nearby
+GENIE_SPACE_ID=<Space ID from step 2d>
+GENIE_SPACE_NAME=Healthcare Facilities Insights
+LOCATION_IQ_ACCESS_TOKEN=pk.XXXXXXXX
+DATABRICKS_WAREHOUSE_ID=<warehouse ID from step 2d>
 ```
 
 ```bash
-# Start the server (aliased via ai_agent.server for backwards compatibility)
+# Run from the project root
 uv run uvicorn ai_agent.server:app --reload --port 8000
 ```
 
 ---
 
+### 4. Start the Frontend
+
+Create `frontend/.env`:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+VITE_MAPBOX_TOKEN=<your-mapbox-public-token>
+```
+
+```bash
+cd frontend && pnpm install && pnpm dev
+# Accessible at http://localhost:5173
+```
+
+---
+
 ## Part I — Intelligent Document Processing (IDP) Pipeline
+
+[Jump to Part II → AI Agent Pipeline](#part-ii--ai-agent-pipeline)
 
 The IDP (Intelligent Document Processing) Pipeline is the **data backbone** of Med-Atlas-AI. It takes a raw CSV of healthcare facilities, cleans and deduplicates the records, uses an AI model to fill in missing structured details, resolves locations and coordinates, and ultimately stores everything in three organised database tables — ready for the AI Agent to query.
 
@@ -503,6 +579,8 @@ WHERE f.state = 'Greater Accra'
 
 ## Part II — AI Agent Pipeline
 
+[← Back to Part I — IDP Pipeline](#part-i--intelligent-document-processing-idp-pipeline)
+
 The AI Agent is a conversational intelligence layer built on top of the three Delta tables populated by the IDP Pipeline. It accepts natural language questions about Ghana's healthcare infrastructure — ranging from "Which clinics in Kumasi perform cardiac surgery?" to "Where are the largest geographic cold spots for emergency care within 50 km?" — and returns medically grounded, evidence-backed answers. Rather than sending every question blindly to an LLM, the agent first **classifies the intent** of each query and then **routes it** to the most appropriate computational tool: a geospatial SQL engine, a semantic vector search index, a pure-SQL anomaly detector, or a natural language–to-SQL interface.
 
 The core design philosophy is a **Hybrid Reasoning Engine**: **"SQL for strict math, LLM for medical reasoning."** Counting, aggregating, and detecting statistical outliers are handled by optimised Unity Catalog SQL functions — operations the LLM would otherwise perform unreliably. The LLM is reserved exclusively for what it excels at: interpreting structured results, synthesising clinical context, and producing coherent, human-readable responses grounded in the SQL output.
@@ -730,3 +808,30 @@ The architecture is uniquely designed to support **Two-Way Synchronization** bet
    - When the Frontend receives the `/invoke` streaming response, it parses these citations and automatically plots, pans to, or pulses the pins for any facility the LLM decided to talk about in its response.
 
 ---
+
+## Part III — Frontend
+
+[← Back to Part II — AI Agent Pipeline](#part-ii--ai-agent-pipeline)
+
+The frontend is a **React 19 + TypeScript** single-page application built with **Vite**. It provides two primary interfaces: an interactive **Mapbox GL** map for visually exploring Ghana's healthcare facilities with filter controls, and a conversational **chat panel** that streams responses from the AI agent in real time.
+
+### Technology Stack
+
+| Layer | Technology |
+|---|---|
+| **Framework** | React 19 + TypeScript |
+| **Build tool** | Vite |
+| **Styling** | Tailwind CSS v4 |
+| **Map** | Mapbox GL JS v3 — facility pins, viewport bounding box, citation sync |
+| **State management** | Zustand |
+| **Server state / caching** | TanStack Query v5 |
+| **HTTP client** | Axios |
+| **Markdown rendering** | react-markdown + remark-gfm (for agent responses) |
+| **Icons** | Lucide React |
+
+### Key Behaviours
+
+- **Citation Sync** — when the agent references specific facilities, the map automatically pans to and highlights their pins
+- **Viewport-scoped search** — the map's current bounding box is passed to `/map/search` so results always reflect what is visible on screen
+- **Streaming responses** — agent replies are streamed token-by-token from `/invoke` and rendered progressively in the chat panel
+
