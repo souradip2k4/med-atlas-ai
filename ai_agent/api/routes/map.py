@@ -134,7 +134,7 @@ def extract_map_markers(request: ExtractMapMarkersRequest):
     import json
     from databricks_langchain import ChatDatabricks
     from langchain_core.messages import SystemMessage, HumanMessage
-    from ai_agent.agent import LLM_ENDPOINT
+    from ai_agent.config import LLM_ENDPOINT
     
     # Step 1: Use LLM to extract facility names from the markdown
     llm = ChatDatabricks(endpoint=LLM_ENDPOINT, temperature=0.0, max_tokens=2048)
