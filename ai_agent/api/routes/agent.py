@@ -2,7 +2,9 @@ from typing import Any
 import json
 from fastapi import APIRouter, HTTPException
 
-from ai_agent.agent import AGENT, ALL_TOOLS, LLM_ENDPOINT
+from ai_agent.agent import AGENT
+from ai_agent.tools import ALL_TOOLS
+from ai_agent.config import LLM_ENDPOINT
 from mlflow.types.responses import ResponsesAgentRequest
 from mlflow.types.agent import ChatContext
 

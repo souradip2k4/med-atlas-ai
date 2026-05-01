@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 _dot = Path(__file__).parent.parent / ".env"
 load_dotenv(_dot)
 
-from .agent import AGENT, MedAtlasAgent, ALL_TOOLS
+from .agent import AGENT
+from .tools import ALL_TOOLS
 from mlflow.types.responses import ResponsesAgentRequest
 from mlflow.types.agent import ChatContext
 
@@ -73,6 +74,7 @@ if __name__ == "__main__":
 
         # # Multi-tool
         # ("Multi-1", "Count health centres in each region AND find anomalies."),
+        ("Geo-VS-1", "Find facilities that provide cardiac surgery within 10km of Accra.")
     ]
 
     results = {}

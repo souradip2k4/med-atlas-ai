@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ai_agent.agent import ALL_TOOLS, LLM_ENDPOINT
+from ai_agent.tools import ALL_TOOLS
+from ai_agent.config import LLM_ENDPOINT
 from ai_agent.api.routes import agent, map
 
 import os
