@@ -298,18 +298,27 @@ IDP/
 ai_agent/
 ├── api/                                    # Modular FastAPI layer
 │   ├── main.py                             # Assembles routers and middleware
-│   ├── routes/
+│   ├── routes/                             # API Endpoints
 │   │   ├── agent.py                        # /invoke, /tools, /health endpoints
-│   │   ├── map.py                          # /map/search, /map/metadata, /map/facility endpoints
-│   │   └── location.json                   # Static metadata (regions, cities, specialties)
-│   └── schemas/
-│       ├── agent.py                        # Pydantic models for /invoke request/response
-│       └── map.py                          # Pydantic models for /map request/response
-│
-├── agent.py                                # LangGraph StateGraph, all 4 tools, SYSTEM_PROMPT
-├── server.py                               # FastAPI app entry point (imports api/main.py)
+│   │   └── map.py                          # /map/search, /map/metadata, /map/facility endpoints
+│   └── schemas/                            # Pydantic models for request/response validation
+├── tools/                                  # Independent tool modules
+│   ├── genie_chat.py                       # Genie Data Room execution tool
+│   ├── geospatial.py                       # Geospatial UC function tool
+│   ├── medical_agent.py                    # Medical anomaly analysis UC function tool
+│   └── vector_search.py                    # Vector search retriever tool
+├── server/                                 # Server setup
+│   └── __init__.py                         # FastAPI app entry point (`uvicorn ai_agent.server:app`)
+├── agent.py                                # MedAtlasAgent class and MLflow wrapper export
+├── citations.py                            # Stream aggregator and citation tracking logic
+├── config.py                               # Environment variables and MLflow configuration
+├── constants.py                            # Static domain-specific constants
+├── graph.py                                # LangGraph StateGraph, nodes, and orchestration logic
+├── postprocessor.py                        # Graph state postprocessor for multi-tool intersection
+├── prompt.py                               # Agent SYSTEM_PROMPT definition
 ├── setup_geospatial.sql                    # Unity Catalog SQL function: find_facilities_nearby
 ├── setup_uc_function.sql                   # Unity Catalog SQL function: analyze_medical_query
+├── test_agent.py                           # Local test harness suite
 └── .env                                    # Credentials & config (gitignored)
 ```
 

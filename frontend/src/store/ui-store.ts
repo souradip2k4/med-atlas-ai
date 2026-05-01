@@ -11,7 +11,7 @@ import type {
 } from '../lib/types';
 
 const DEFAULT_FILTERS: SearchFilters = {
-  region: '',
+  region: 'Greater Accra',
   city: '',
   specialties: [],
   facilityType: '',
