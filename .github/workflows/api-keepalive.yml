@@ -1,0 +1,100 @@
+name: Med-Atlas API Keep-Alive
+
+on:
+  schedule:
+    # /invoke endpoint — every 30 minutes (2 times per hour)
+    - cron: '0 * * * *'   # every hour at :00
+    - cron: '30 * * * *'  # every hour at :30
+
+    # /map/search endpoint — every 20 minutes (3 times per hour)
+    - cron: '0 * * * *'   # every hour at :00
+    - cron: '20 * * * *'  # every hour at :20
+    - cron: '40 * * * *'  # every hour at :40
+
+  # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  # ── Job 1 ──────────────────────────────────────────────────────────────────
+  # Fires at :00 and :30  →  /invoke  (2× per hour)
+  ping-invoke:
+    name: POST /invoke (every 30 min)
+    runs-on: ubuntu-latest
+
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && (
+        startsWith(github.event.schedule, '0 ')  ||
+        startsWith(github.event.schedule, '30 ')
+      ))
+
+    steps:
+      - name: POST to /invoke
+        run: |
+          echo "Triggering /invoke at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          HTTP_STATUS=$(curl --silent --output /tmp/invoke_response.json \
+            --write-out "%{http_code}" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 \
+            -X POST "https://medatlas.sammaji.com/invoke" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "How many hospitals within 200km of Accra have the ability to performs X-Ray imaging?"
+                }
+              ]
+            }')
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response body:"
+          cat /tmp/invoke_response.json
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "❌ /invoke returned non-2xx status: $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "✅ /invoke succeeded"
+
+  # ── Job 2 ──────────────────────────────────────────────────────────────────
+  # Fires at :00, :20, and :40  →  /map/search  (3× per hour)
+  ping-map-search:
+    name: POST /map/search (every 20 min)
+    runs-on: ubuntu-latest
+
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && (
+        startsWith(github.event.schedule, '0 ')  ||
+        startsWith(github.event.schedule, '20 ') ||
+        startsWith(github.event.schedule, '40 ')
+      ))
+
+    steps:
+      - name: POST to /map/search
+        run: |
+          echo "Triggering /map/search at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          HTTP_STATUS=$(curl --silent --output /tmp/map_response.json \
+            --write-out "%{http_code}" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 \
+            -X POST "https://medatlas.sammaji.com/map/search" \
+            -H "Content-Type: application/json" \
+            -d '{"region": "Greater Accra"}')
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response body:"
+          cat /tmp/map_response.json
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "❌ /map/search returned non-2xx status: $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "✅ /map/search succeeded"
