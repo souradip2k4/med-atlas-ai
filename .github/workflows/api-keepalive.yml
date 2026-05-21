@@ -2,13 +2,14 @@ name: Med-Atlas API Keep-Alive
 
 on:
   schedule:
-    # /invoke endpoint — every 30 minutes (2 times per hour)
-    - cron: '0 * * * *'   # every hour at :00
-    - cron: '30 * * * *'  # every hour at :30
-
-    # /map/search endpoint — every 20 minutes (3 times per hour)
+    # Unified schedule covering all required intervals:
+    # :00 → both /invoke AND /map/search
+    # :20 → /map/search only
+    # :30 → /invoke only
+    # :40 → /map/search only
     - cron: '0 * * * *'   # every hour at :00
     - cron: '20 * * * *'  # every hour at :20
+    - cron: '30 * * * *'  # every hour at :30
     - cron: '40 * * * *'  # every hour at :40
 
   # Allow manual trigger from the Actions tab
