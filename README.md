@@ -1,6 +1,8 @@
 # Med-Atlas-AI
 
-An end-to-end healthcare infrastructure intelligence platform for Ghana. The system comprises two tightly integrated subsystems: an **IDP Pipeline** that transforms raw facility data into structured Delta tables with vector-searchable facts, and an **AI Agent** that answers complex medical, statistical, and geospatial queries using a hybrid SQL + LLM reasoning engine.
+By 2030, the world will face a shortage of over 10 million healthcare workers — not because expertise doesn't exist, but because it isn't intelligently coordinated. Skilled doctors remain disconnected from the hospitals and communities that urgently need them, leaving Medical Deserts and Infrastructure Gaps in medical facilities across countries like Ghana — a coordination failure that costs lives.
+
+**Med-Atlas-AI** is an agentic healthcare intelligence platform built to close that gap. Starting with Ghana, it combines an **IDP Pipeline** — which extracts and verifies facility capabilities from messy, unstructured data from the given CSV dataset into structured Delta tables. Our **AI Agent** reasons using [**multiple tools**](#1-agent-architecture-tools-used--query-routing) — to answer complex medical, statistical, and geospatial queries via a hybrid SQL + LLM engine. The result: infrastructure gaps identified in seconds, medical deserts mapped, and the right care connected to the right place — faster.
 
 > **Navigate:** [Part I — IDP Pipeline](#part-i--intelligent-document-processing-idp-pipeline) · [Part II — AI Agent Pipeline](#part-ii--ai-agent-pipeline) · [Part III — Frontend](#part-iii--frontend)
 
@@ -611,7 +613,7 @@ The core design philosophy is a **Hybrid Reasoning Engine**: **"SQL for strict m
 
 ---
 
-### 1. Agent Architecture & Query Routing
+### 1. Agent Architecture, Tools Used & Query Routing
 
 Queries are intercepted by our LangChain agent (`agent.py`) and routed dynamically based on natural language intent:
 
@@ -826,21 +828,20 @@ The frontend is a **React 19 + TypeScript** single-page application built with *
 
 ### Technology Stack
 
-| Layer | Technology |
-|---|---|
-| **Framework** | React 19 + TypeScript |
-| **Build tool** | Vite |
-| **Styling** | Tailwind CSS v4 |
-| **Map** | Mapbox GL JS v3 — facility pins, viewport bounding box, citation sync |
-| **State management** | Zustand |
-| **Server state / caching** | TanStack Query v5 |
-| **HTTP client** | Axios |
-| **Markdown rendering** | react-markdown + remark-gfm (for agent responses) |
-| **Icons** | Lucide React |
+| Layer                      | Technology                                                            |
+| -------------------------- | --------------------------------------------------------------------- |
+| **Framework**              | React 19 + TypeScript                                                 |
+| **Build tool**             | Vite                                                                  |
+| **Styling**                | Tailwind CSS v4                                                       |
+| **Map**                    | Mapbox GL JS v3 — facility pins, viewport bounding box, citation sync |
+| **State management**       | Zustand                                                               |
+| **Server state / caching** | TanStack Query v5                                                     |
+| **HTTP client**            | Axios                                                                 |
+| **Markdown rendering**     | react-markdown + remark-gfm (for agent responses)                     |
+| **Icons**                  | Lucide React                                                          |
 
 ### Key Behaviours
 
 - **Citation Sync** — when the agent references specific facilities, the map automatically pans to and highlights their pins
 - **Viewport-scoped search** — the map's current bounding box is passed to `/map/search` so results always reflect what is visible on screen
 - **Streaming responses** — agent replies are streamed token-by-token from `/invoke` and rendered progressively in the chat panel
-

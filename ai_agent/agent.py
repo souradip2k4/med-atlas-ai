@@ -52,9 +52,6 @@ from mlflow.types.responses_helpers import (
 # in execution order. This lets API consumers see exactly which tools ran and
 # in what sequence before the final answer.
 
-
-
-
 # ─── ResponsesAgent (MLflow 3.x deployment interface) ──────────────────────────
 
 from typing import NamedTuple
