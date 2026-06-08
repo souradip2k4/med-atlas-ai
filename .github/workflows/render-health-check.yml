@@ -1,0 +1,28 @@
+name: Render Keep-Alive
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping-render:
+    name: Ping Render /health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Make HTTP GET Request to Render Health Check
+        run: |
+          echo "Pinging health endpoint at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          HTTP_STATUS=$(curl --silent --output /dev/null \
+            --write-out "%{http_code}" \
+            --max-time 60 \
+            --retry 3 \
+            --retry-delay 10 \
+            "https://med-atlas-ai.onrender.com/health")
+          
+          echo "HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "❌ Health check failed with status $HTTP_STATUS"
+            exit 1
+          fi
+          echo "✅ Health check succeeded"
