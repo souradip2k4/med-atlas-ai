@@ -1,26 +1,31 @@
-import { useRef, useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   BotMessageSquare,
   MapPinned,
-  SendHorizontal,
   RotateCcw,
+  SendHorizontal,
   Sparkles,
   Square,
   X,
-} from 'lucide-react';
-import { useUIStore } from '../store/ui-store';
-import { extractMapMarkers, invokeAgent } from '../lib/api';
-import { ChatCitationsView } from './ChatCitationsView';
-import { ChatMappedFacilitiesView } from './ChatMappedFacilitiesView';
-import type { AgentResponse, ExtractedMapMarker } from '../lib/types';
+} from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { extractMapMarkers, invokeAgent } from "../lib/api";
+import type { AgentResponse, ExtractedMapMarker } from "../lib/types";
+import { useUIStore } from "../store/ui-store";
+import { ChatCitationsView } from "./ChatCitationsView";
+import { ChatMappedFacilitiesView } from "./ChatMappedFacilitiesView";
 
 const SUGGESTED_PROMPTS = [
-  'How many hospitals within 200km of Accra have the ability to performs X-Ray imaging?',
-  'Show the top 5 regions/state by number of health facilities.',
-  'Which facilities have an unusually high breadth of claimed procedures relative to their stated/observed infrastructure signals (e.g.,200 procedures with minimal equipment list) in the Greater Accra region?',
-  'Check for equipment-procedure mismatches in Ashanti Region',
+  "How many hospitals within 200km of Accra have the ability to performs X-Ray imaging?",
+  "Show the top 5 regions/state by number of health facilities.",
+  "Which facilities have an unusually high breadth of claimed procedures relative to their stated/observed infrastructure signals (e.g.,200 procedures with minimal equipment list) in the Greater Accra region?",
+  "Check for equipment-procedure mismatches in Ashanti Region",
 ];
 
 const MIN_CHAT_WIDTH_VW = 20;
@@ -42,7 +47,7 @@ export function ChatPanel() {
     setExtractedMapMarkers,
   } = useUIStore();
 
-  const [inputVal, setInputVal] = useState('');
+  const [inputVal, setInputVal] = useState("");
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isResizingRef = useRef(false);
@@ -51,13 +56,16 @@ export function ChatPanel() {
   const [desktopWidthVw, setDesktopWidthVw] = useState(MAX_CHAT_WIDTH_VW);
 
   const isAnyLoading = chatEntries.some((e) => e.isLoading);
-  const viewedCitations = chatEntries.find((e) => e.id === viewingCitationsId)?.citations;
+  const viewedCitations = chatEntries.find(
+    (e) => e.id === viewingCitationsId,
+  )?.citations;
   const viewedMappedFacilities =
-    chatEntries.find((e) => e.id === viewingMappedFacilitiesId)?.extractedMapMarkers ?? [];
+    chatEntries.find((e) => e.id === viewingMappedFacilitiesId)
+      ?.extractedMapMarkers ?? [];
 
   useEffect(() => {
     if (chatOpen && !viewingCitationsId) {
-      endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
+      endOfMessagesRef.current?.scrollIntoView({ behavior: "smooth" });
       // Small delay to allow panel animation to complete
       setTimeout(() => inputRef.current?.focus(), 350);
     }
@@ -69,8 +77,12 @@ export function ChatPanel() {
         return;
       }
 
-      const nextWidth = ((window.innerWidth - event.clientX) / window.innerWidth) * 100;
-      const clampedWidth = Math.min(MAX_CHAT_WIDTH_VW, Math.max(MIN_CHAT_WIDTH_VW, nextWidth));
+      const nextWidth =
+        ((window.innerWidth - event.clientX) / window.innerWidth) * 100;
+      const clampedWidth = Math.min(
+        MAX_CHAT_WIDTH_VW,
+        Math.max(MIN_CHAT_WIDTH_VW, nextWidth),
+      );
       setDesktopWidthVw(clampedWidth);
     };
 
@@ -80,20 +92,20 @@ export function ChatPanel() {
       }
 
       isResizingRef.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
 
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', stopResize);
-    window.addEventListener('pointercancel', stopResize);
-    window.addEventListener('blur', stopResize);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    window.addEventListener("blur", stopResize);
 
     return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', stopResize);
-      window.removeEventListener('pointercancel', stopResize);
-      window.removeEventListener('blur', stopResize);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      window.removeEventListener("blur", stopResize);
       stopResize();
     };
   }, []);
@@ -104,8 +116,8 @@ export function ChatPanel() {
     }
 
     isResizingRef.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -126,11 +138,11 @@ export function ChatPanel() {
       errorMessage: null,
       referencedFacilities: [],
       extractedMapMarkers: [],
-      extractedMapMarkersStatus: 'idle',
+      extractedMapMarkersStatus: "idle",
       extractedMapMarkersError: null,
     });
 
-    setInputVal('');
+    setInputVal("");
 
     try {
       const response: AgentResponse = await invokeAgent(promptWithContext);
@@ -141,10 +153,10 @@ export function ChatPanel() {
         }
         return;
       }
-      
-      const assistantMsg = response.output?.find((m) => m.role === 'assistant');
-      const text = assistantMsg?.content || 'No response generated.';
-      
+
+      const assistantMsg = response.output?.find((m) => m.role === "assistant");
+      const text = assistantMsg?.content || "No response generated.";
+
       const markers: Array<{
         facility_id: string;
         facility_name: string;
@@ -154,13 +166,13 @@ export function ChatPanel() {
 
       // Extract unique coordinates for map sync
       if (response.citations?.steps) {
-        response.citations.steps.forEach(step => {
-          step.sources?.forEach(source => {
+        response.citations.steps.forEach((step) => {
+          step.sources?.forEach((source) => {
             if (source.facility_id && source.latitude && source.longitude) {
-              if (!markers.some(m => m.facility_id === source.facility_id)) {
+              if (!markers.some((m) => m.facility_id === source.facility_id)) {
                 markers.push({
                   facility_id: source.facility_id,
-                  facility_name: source.facility_name || 'Unknown',
+                  facility_name: source.facility_name || "Unknown",
                   latitude: source.latitude,
                   longitude: source.longitude,
                 });
@@ -171,13 +183,13 @@ export function ChatPanel() {
       }
 
       setAgentMarkers(markers);
-      
+
       updateChatEntry(entryId, {
         isLoading: false,
         assistantMessage: text,
         citations: response.citations,
         referencedFacilities: markers,
-        extractedMapMarkersStatus: 'loading',
+        extractedMapMarkersStatus: "loading",
         extractedMapMarkersError: null,
       });
 
@@ -194,20 +206,21 @@ export function ChatPanel() {
 
           updateChatEntry(entryId, {
             extractedMapMarkers: extractionResponse.map_markers,
-            extractedMapMarkersStatus: 'success',
+            extractedMapMarkersStatus: "success",
             extractedMapMarkersError: null,
           });
 
-          const latestEntryId = useUIStore.getState().chatEntries.at(-1)?.id ?? null;
+          const latestEntryId =
+            useUIStore.getState().chatEntries.at(-1)?.id ?? null;
           if (latestEntryId === entryId) {
             setExtractedMapMarkers(entryId, extractionResponse.map_markers);
           }
         } catch (error) {
           updateChatEntry(entryId, {
             extractedMapMarkers: [],
-            extractedMapMarkersStatus: 'error',
+            extractedMapMarkersStatus: "error",
             extractedMapMarkersError:
-              error instanceof Error ? error.message : 'Map extraction failed.',
+              error instanceof Error ? error.message : "Map extraction failed.",
           });
         }
       })();
@@ -215,7 +228,6 @@ export function ChatPanel() {
       if (activeRequestIdRef.current === entryId) {
         activeRequestIdRef.current = null;
       }
-      
     } catch (err) {
       if (stoppedRequestIdsRef.current.has(entryId)) {
         stoppedRequestIdsRef.current.delete(entryId);
@@ -224,11 +236,12 @@ export function ChatPanel() {
         }
         return;
       }
-      console.error('Agent invocation error:', err);
+      console.error("Agent invocation error:", err);
       updateChatEntry(entryId, {
         isLoading: false,
         isError: true,
-        errorMessage: err instanceof Error ? err.message : 'An unknown error occurred.',
+        errorMessage:
+          err instanceof Error ? err.message : "An unknown error occurred.",
       });
       if (activeRequestIdRef.current === entryId) {
         activeRequestIdRef.current = null;
@@ -249,7 +262,7 @@ export function ChatPanel() {
       citations: null,
       referencedFacilities: [],
       extractedMapMarkers: [],
-      extractedMapMarkersStatus: 'idle',
+      extractedMapMarkersStatus: "idle",
       extractedMapMarkersError: null,
       isError: false,
       errorMessage: null,
@@ -259,13 +272,16 @@ export function ChatPanel() {
     activeRequestIdRef.current = null;
   };
 
-  const activateExtractedMarkers = (entryId: string, markers: ExtractedMapMarker[]) => {
+  const activateExtractedMarkers = (
+    entryId: string,
+    markers: ExtractedMapMarker[],
+  ) => {
     setExtractedMapMarkers(entryId, markers);
     setViewingMappedFacilitiesId(entryId);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(inputVal);
     }
@@ -295,26 +311,34 @@ export function ChatPanel() {
           onClose={() => setViewingMappedFacilitiesId(null)}
         />
       ) : viewingCitationsId && viewedCitations ? (
-        <ChatCitationsView 
-          citations={viewedCitations} 
-          onClose={() => setViewingCitationsId(null)} 
+        <ChatCitationsView
+          citations={viewedCitations}
+          onClose={() => setViewingCitationsId(null)}
         />
       ) : (
         <>
-          <div className="flex shrink-0 items-center justify-between border-b border-border-app/80 bg-[var(--color-chat-header)] px-6 py-2.5 backdrop-blur-[10px]">
-            <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-4 border-b border-border-app/80 bg-[var(--color-chat-header)] px-6 py-2.5 backdrop-blur-[10px]">
+            <div className="flex min-w-0 items-center gap-3">
               <div className="relative flex size-11 items-center justify-center rounded-full bg-[var(--color-chat-icon-bg)] text-accent-700">
                 <span className="absolute inset-1 rounded-full border border-accent-100/90 animate-pulse" />
-                <BotMessageSquare className="relative z-[1] size-5" strokeWidth={2.2} />
+                <BotMessageSquare
+                  className="relative z-[1] size-5"
+                  strokeWidth={2.2}
+                />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-[0.74rem] font-bold uppercase tracking-[0.2em] text-accent-700">
                   Assistant
                 </div>
                 <div className="text-sm text-ink-500">MedAtlas AI copilot</div>
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="hidden min-w-0 flex-1 justify-center min-[1180px]:flex">
+              <div className="truncate text-center text-sm font-medium text-ink-500/95">
+                Some prompts may take 2-3+ minutes to answer
+              </div>
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {chatEntries.length > 0 && (
                 <button
                   type="button"
@@ -346,13 +370,17 @@ export function ChatPanel() {
                   <span className="absolute inset-0 rounded-full bg-[var(--color-chat-orb-glow)] animate-pulse" />
                   <span className="absolute inset-[10px] rounded-full border border-accent-100/90 animate-[spin_12s_linear_infinite]" />
                   <span className="absolute inset-[18px] rounded-full bg-[var(--color-chat-orb-core)] shadow-[0_18px_38px_rgba(79,141,247,0.16)]" />
-                  <Sparkles className="relative z-[1] size-7 text-accent-700" strokeWidth={2} />
+                  <Sparkles
+                    className="relative z-[1] size-7 text-accent-700"
+                    strokeWidth={2}
+                  />
                 </div>
                 <h3 className="mb-2 text-[1.55rem] font-semibold tracking-[-0.03em] text-ink-900">
                   Ask the healthcare assistant
                 </h3>
                 <p className="mb-8 max-w-[360px] text-[0.98rem] leading-7 text-ink-7">
-                  Search equipment, trace service gaps, compare facilities, and validate claims against the Ghana medical dataset.
+                  Search equipment, trace service gaps, compare facilities, and
+                  validate claims against the Ghana medical dataset.
                 </p>
                 <div className="flex w-full flex-col gap-2">
                   {SUGGESTED_PROMPTS.map((prompt) => (
@@ -387,11 +415,21 @@ export function ChatPanel() {
 
                       {entry.isError && (
                         <div className="rounded-[20px] rounded-bl-[4px] bg-surface-error px-4 py-3 text-[0.95rem] text-red-700 border border-red-100 shadow-sm">
-                          <div className="font-semibold mb-1">Failed to generate response</div>
-                          <div className="opacity-80 text-sm mb-3 limit-lines">{entry.errorMessage}</div>
+                          <div className="font-semibold mb-1">
+                            Failed to generate response
+                          </div>
+                          <div className="opacity-80 text-sm mb-3 limit-lines">
+                            {entry.errorMessage}
+                          </div>
                           <button
                             type="button"
-                            onClick={() => updateChatEntry(entry.id, { isError: false, errorMessage: null, isLoading: true })}
+                            onClick={() =>
+                              updateChatEntry(entry.id, {
+                                isError: false,
+                                errorMessage: null,
+                                isLoading: true,
+                              })
+                            }
                             className="inline-flex items-center gap-1.5 text-sm font-semibold hover:underline"
                           >
                             <RotateCcw className="size-3.5" />
@@ -411,7 +449,7 @@ export function ChatPanel() {
                       {(entry.citations &&
                         (entry.citations.summary.total_sources > 0 ||
                           entry.citations.steps.length > 0)) ||
-                      entry.extractedMapMarkersStatus !== 'idle' ? (
+                      entry.extractedMapMarkersStatus !== "idle" ? (
                         <div className="ml-1 mt-1 flex flex-wrap items-center gap-2">
                           {entry.citations &&
                           (entry.citations.summary.total_sources > 0 ||
@@ -422,16 +460,40 @@ export function ChatPanel() {
                                 onClick={() => setViewingCitationsId(entry.id)}
                                 className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
                               >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M3 19h6"/><path d="M10 12h.01"/></svg>
-                                Citation Sources {Math.max(entry.citations.summary.total_sources, entry.citations.steps.length)}
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4" />
+                                  <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+                                  <path d="M3 15h6" />
+                                  <path d="M3 19h6" />
+                                  <path d="M10 12h.01" />
+                                </svg>
+                                Citation Sources{" "}
+                                {Math.max(
+                                  entry.citations.summary.total_sources,
+                                  entry.citations.steps.length,
+                                )}
                               </button>
-                              <span className="chip-tooltip chip-tooltip--start" role="tooltip">
-                                Contains citations of all the tools and actual resources that were referred for generating this answer.
+                              <span
+                                className="chip-tooltip chip-tooltip--start"
+                                role="tooltip"
+                              >
+                                Contains citations of all the tools and actual
+                                resources that were referred for generating this
+                                answer.
                               </span>
                             </div>
                           ) : null}
 
-                          {entry.extractedMapMarkersStatus === 'loading' ? (
+                          {entry.extractedMapMarkersStatus === "loading" ? (
                             <div className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500">
                               <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_infinite]" />
                               <span className="size-1.5 rounded-full bg-ink-400 animate-[typing-dot_1.4s_0.2s_infinite]" />
@@ -440,35 +502,59 @@ export function ChatPanel() {
                             </div>
                           ) : null}
 
-                          {entry.extractedMapMarkersStatus === 'success' && entry.extractedMapMarkers.length > 0 ? (
+                          {entry.extractedMapMarkersStatus === "success" &&
+                          entry.extractedMapMarkers.length > 0 ? (
                             <div className="tooltip-chip-group">
                               <button
                                 type="button"
-                                onClick={() => activateExtractedMarkers(entry.id, entry.extractedMapMarkers)}
+                                onClick={() =>
+                                  activateExtractedMarkers(
+                                    entry.id,
+                                    entry.extractedMapMarkers,
+                                  )
+                                }
                                 className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500 transition hover:border-border-highlight-soft hover:bg-[var(--color-chat-citation-chip-hover)] hover:text-accent-700"
                               >
-                                <MapPinned className="size-3.5" strokeWidth={2.2} />
-                                Listed Facilities {entry.extractedMapMarkers.length}
+                                <MapPinned
+                                  className="size-3.5"
+                                  strokeWidth={2.2}
+                                />
+                                Listed Facilities{" "}
+                                {entry.extractedMapMarkers.length}
                               </button>
-                              <span className="chip-tooltip chip-tooltip--end" role="tooltip">
-                                List all the facility names specifically that are listed in the prompt answer.
+                              <span
+                                className="chip-tooltip chip-tooltip--end"
+                                role="tooltip"
+                              >
+                                List all the facility names specifically that
+                                are listed in the prompt answer.
                               </span>
                             </div>
                           ) : null}
 
-                          {entry.extractedMapMarkersStatus === 'success' && entry.extractedMapMarkers.length === 0 ? (
+                          {entry.extractedMapMarkersStatus === "success" &&
+                          entry.extractedMapMarkers.length === 0 ? (
                             <div className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500/80">
-                              <MapPinned className="size-3.5" strokeWidth={2.2} />
+                              <MapPinned
+                                className="size-3.5"
+                                strokeWidth={2.2}
+                              />
                               No mapped facilities
                             </div>
                           ) : null}
 
-                          {entry.extractedMapMarkersStatus === 'error' ? (
+                          {entry.extractedMapMarkersStatus === "error" ? (
                             <div
                               className="inline-flex items-center gap-1.5 rounded-full border border-border-panel/80 bg-[var(--color-chat-citation-chip-bg)] px-3 py-1.5 text-[0.75rem] font-bold text-ink-500/80"
-                              title={entry.extractedMapMarkersError ?? 'Map extraction unavailable'}
+                              title={
+                                entry.extractedMapMarkersError ??
+                                "Map extraction unavailable"
+                              }
                             >
-                              <MapPinned className="size-3.5" strokeWidth={2.2} />
+                              <MapPinned
+                                className="size-3.5"
+                                strokeWidth={2.2}
+                              />
                               Map extraction unavailable
                             </div>
                           ) : null}
@@ -496,9 +582,11 @@ export function ChatPanel() {
               <button
                 type="button"
                 disabled={isAnyLoading ? false : !inputVal.trim()}
-                onClick={isAnyLoading ? handleStop : () => handleSubmit(inputVal)}
+                onClick={
+                  isAnyLoading ? handleStop : () => handleSubmit(inputVal)
+                }
                 className="absolute bottom-1.5 right-3 flex size-10 items-center justify-center rounded-full bg-accent-600 text-white shadow-[0_10px_22px_rgba(47,111,229,0.28)] transition hover:bg-accent-700 disabled:bg-ink-400 disabled:opacity-90"
-                aria-label={isAnyLoading ? 'Stop response' : 'Send message'}
+                aria-label={isAnyLoading ? "Stop response" : "Send message"}
               >
                 {isAnyLoading ? (
                   <Square className="size-4 fill-current" strokeWidth={2.5} />
@@ -508,7 +596,8 @@ export function ChatPanel() {
               </button>
             </div>
             <p className="pt-2 text-center text-[0.72rem] font-medium text-ink-500/90">
-              Responses may vary and take some time to generate. If this result is not useful, run the same prompt again.
+              Responses may vary and take some time to generate. If this result
+              is not useful, run the same prompt again.
             </p>
           </div>
         </>
