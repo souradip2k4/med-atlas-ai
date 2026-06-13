@@ -1,6 +1,6 @@
 # storage package
-from storage.database import DatabricksDatabase
-from storage.models import (
+from IDP.storage.database import DatabricksDatabase
+from IDP.storage.models import (
     FACILITY_RECORDS_SCHEMA,
     FACILITY_FACTS_SCHEMA,
     REGIONAL_INSIGHTS_SCHEMA,

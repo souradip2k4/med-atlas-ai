@@ -21,14 +21,14 @@ from dotenv import load_dotenv
 
 from pyspark.sql import functions as F
 
-from storage.database import DatabricksDatabase
-from storage.models import (
+from IDP.storage.database import DatabricksDatabase
+from IDP.storage.models import (
     FACILITY_RECORDS_SCHEMA,
 )
-from pipeline.loader import load_csv_data
-from pipeline.deduplicator import deduplicate_rows
-from pipeline.extractor import LLMExtractor
-from pipeline.merger import merge_extraction_results
+from IDP.pipeline.loader import load_csv_data
+from IDP.pipeline.deduplicator import deduplicate_rows
+from IDP.pipeline.extractor import LLMExtractor
+from IDP.pipeline.merger import merge_extraction_results
 
 load_dotenv()
 

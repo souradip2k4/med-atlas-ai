@@ -21,11 +21,11 @@ from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
 from databricks_langchain import ChatDatabricks
 
-from config.free_form import (
+from IDP.config.free_form import (
     FacilityFacts,
     FREE_FORM_SYSTEM_PROMPT,
 )
-from pipeline.preprocessor import (
+from IDP.pipeline.preprocessor import (
     synthesize_for_fact_extraction,
 )
 

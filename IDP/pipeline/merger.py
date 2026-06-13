@@ -16,8 +16,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from pipeline.geocoder import FacilityGeocoder
-from pipeline.location_resolver import resolve_location as _resolve_location_via_gemini
+from IDP.pipeline.geocoder import FacilityGeocoder
+from IDP.pipeline.location_resolver import resolve_location as _resolve_location_via_gemini
 
 logger = logging.getLogger(__name__)
 
@@ -366,7 +366,7 @@ def _infer_ghana_region(city: Optional[str]) -> Optional[str]:
 
 def _clean_array(arr):
     """Delete junk location/contact/directory strings using the shared _GARBAGE_KEYWORDS."""
-    from pipeline.extractor import _GARBAGE_KEYWORDS
+    from IDP.pipeline.extractor import _GARBAGE_KEYWORDS
     if not arr:
         return []
     return [

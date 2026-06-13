@@ -1,6 +1,6 @@
 """Quick test for the regex fallback extraction functions in merger.py."""
 
-from pipeline.merger import _extract_bed_count, _extract_doctor_count
+from IDP.pipeline.merger import _extract_bed_count, _extract_doctor_count
 
 # ── Test _extract_bed_count ──────────────────────────────────────────────────
 

@@ -10,12 +10,12 @@ from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
-from storage.database import DatabricksDatabase
-from storage.models import (
+from IDP.storage.database import DatabricksDatabase
+from IDP.storage.models import (
     FACILITY_FACTS_SCHEMA,
 )
 
-from pipeline.facility_fact_generator import generate_facts
+from IDP.pipeline.facility_fact_generator import generate_facts
 
 load_dotenv()
 

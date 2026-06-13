@@ -31,8 +31,8 @@ from dotenv import load_dotenv
 from pyspark.sql import functions as F
 from pyspark.sql.types import IntegerType
 
-from storage.database import DatabricksDatabase
-from storage.models import REGIONAL_INSIGHTS_SCHEMA
+from IDP.storage.database import DatabricksDatabase
+from IDP.storage.models import REGIONAL_INSIGHTS_SCHEMA
 
 load_dotenv()
 
