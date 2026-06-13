@@ -589,12 +589,25 @@ class _ToolCallTracker:
                 ))
 
             # 2) Emit text content as message (may be empty if this is a tool-call-only turn)
-            if content.strip():
+            if isinstance(content, list):
+                texts = []
+                for c in content:
+                    if isinstance(c, dict) and "text" in c:
+                        texts.append(c["text"])
+                    elif hasattr(c, "text"):
+                        texts.append(getattr(c, "text"))
+                    elif isinstance(c, str):
+                        texts.append(c)
+                content_str = "\n".join(texts)
+            else:
+                content_str = str(content)
+
+            if content_str.strip():
                 self._emit(OutputItem(
                     type="message",
                     id=msg_id,
                     role="assistant",
-                    content=[Content(type="output_text", text=content)],
+                    content=[Content(type="output_text", text=content_str)],
                 ))
 
         elif msg_type == "tool":
